@@ -10,7 +10,7 @@ const {
   parseDataSourceUrl,
   dispatch,
   handler,
-} = await import("./notion-proxy.js");
+} = await import("../netlify/functions/notion-proxy.js");
 
 const FULL = (suffix) => "mcp__b47f7667-3cb0-4d8e-bbaf-fa1fca4c39c7__" + suffix;
 const STATE_ID = "37478f3d-415b-814c-8c65-dd76b6ab9aa3";

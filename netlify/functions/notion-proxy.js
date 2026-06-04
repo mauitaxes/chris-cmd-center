@@ -21,6 +21,7 @@ const DS_SCHEMAS = {
   "17f7f036-e24c-40ce-9d41-db5d8a66b618": {
     Routine: "title", Active: "checkbox", "Done Today": "checkbox", Order: "number",
     "Time Of Day": "select", "Last Done": "date", "Streak Count": "number",
+    Mins: "number", Why: "rich_text",
   },
   // Capture
   "35ba4e31-eca6-4ab7-8625-acc41d5341e8": {

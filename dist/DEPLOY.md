@@ -1,23 +1,36 @@
-# Deploy — Command Center (Netlify Drop)
+# Deploy — Command Center
 
-The `dist/` folder is a complete, standalone build. Deploy in under a minute.
+The canonical live build is **`dist/index.html`**, served at
+**https://chris-cmd-center.netlify.app**. Deployment is git-based and automatic.
 
-## Steps
+## How deploy works
 
-1. Open **https://app.netlify.com/drop** in your browser (log in if prompted — a free account is fine).
-2. Drag the **entire `dist/` folder** onto the drop zone (not just `index.html`).
-3. Wait for the upload bar to finish. Netlify gives you a live URL like `https://random-name-123.netlify.app`.
-4. Open that URL on Home, Office, and Phone. Bookmark it / add to home screen on each device.
+- The GitHub repo **`mauitaxes/chris-cmd-center`** is this folder.
+- Netlify is connected to that repo and **publishes the `dist/` folder on every push to `main`**.
+- To ship a change: commit and push to `main`. Netlify rebuilds and republishes the same URL
+  within a minute. There is no manual drag-and-drop step.
 
-## Updating later
+```
+git add -A && git commit -m "your message" && git push
+```
 
-To publish a new build: open the same site in Netlify → **Deploys** tab → drag the updated `dist/` folder onto the deploy area. The URL stays the same.
+## What runs where (live Notion both ways)
 
-Optional: in **Site settings → Change site name**, set a memorable subdomain (e.g. `chris-command-center.netlify.app`).
+Unlike older notes, the Netlify build is **not** local-only. It reads and writes **live Notion**:
 
-## What runs where
+- **On the Netlify URL (normal browser):** there is no Cowork bridge, so `call()` automatically
+  routes Notion reads/writes through the serverless proxy at
+  **`netlify/functions/notion-proxy.js`**. Tasks, wins, routines, captures, and focus sessions
+  sync to Notion and across devices. The Notion token lives in **Netlify environment variables**
+  as `NOTION_TOKEN` (server-side only — never shipped to the browser).
+- **Inside the Cowork app:** the `window.cowork.callMcpTool` bridge is present and is used directly.
+- **Offline / no network:** the app boots from its localStorage cache plus the embedded
+  `SNAPSHOT`, and queues changes locally until the next successful sync.
 
-- **Inside the Cowork app:** the `window.cowork.callMcpTool` bridge is present, so the dashboard reads and writes Notion live (tasks, wins, routines, focus sessions, streak).
-- **On the Netlify URL (normal browser):** the bridge is not present, so the app boots from its localStorage cache (last-known-good data) and the embedded snapshot. You can check off tasks, log wins, and capture notes — these are saved **locally on that device** and persist across reloads, but do **not** sync to Notion or across devices.
+## Files
 
-So the Netlify build is a fast, always-available view of your day. Use it inside Cowork when you need changes pushed back to Notion and mirrored across all three devices.
+- `dist/index.html` — the one self-contained build (inline CSS, inlined `CCData` data module,
+  embedded `SNAPSHOT`, all UI/action JS). **This is the only runtime target.**
+- `netlify/functions/notion-proxy.js` — the Notion read/write proxy used by the Netlify URL.
+- `cc-data.js` + `cc-data.test.js` — unit-tested source of truth for the data layer; re-inlined
+  into `dist/index.html` between the `/*__CC_DATA_START__*/` … `/*__CC_DATA_END__*/` markers.

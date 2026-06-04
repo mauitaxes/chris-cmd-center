@@ -76,7 +76,7 @@
       if(op.t==="task"){var x=s.tasks.filter(function(z){return z.id===op.id;})[0]; if(x)x.done=op.done;}
       else if(op.t==="prio"){var xp=s.tasks.filter(function(z){return z.id===op.id;})[0]; if(xp)xp.priority=op.priority;}
       else if(op.t==="routine"){s.routines=s.routines||[]; var r=s.routines.filter(function(z){return z.id===op.id;})[0]; if(r)r.done=op.done;}
-      else if(op.t==="taskAdd"){ if(!s.tasks.some(function(z){return z.id===op.tmpid;})) s.tasks.unshift({id:op.tmpid,title:op.title,area:"Focus & Work",done:false,priority:false,due:"",energy:"",time:""}); }
+      else if(op.t==="taskAdd"){ if(!s.tasks.some(function(z){return z.id===op.tmpid;})) s.tasks.unshift({id:op.tmpid,title:op.title,area:op.area||"Focus & Work",done:false,priority:false,due:"",energy:"",time:""}); }
       else if(op.t==="win"){ s.wins.unshift({title:op.title,date:op.date}); }
       else if(op.t==="cap"){ s.caps.unshift({id:null,item:op.item}); }
       else if(op.t==="focus"){ s.focusMinutesToday=(+s.focusMinutesToday||0)+op.min; }
@@ -87,6 +87,42 @@
     var have={}; (rows||[]).forEach(function(r){ have[r.id]=1; });
     var missing=(ids||[]).filter(function(id){ return !have[id]; });
     return { ok: missing.length===0, missing: missing };
+  }
+
+  // -- Group 6: routine editing + task grouping (v1.4.0) --
+  // field ∈ {name,why,mins,when,order}; returns the Notion properties patch for one edit
+  function routinePropsFor(field, value){
+    if(field==="name") return {Routine:String(value)};
+    if(field==="why")  return {Why:String(value)};
+    if(field==="mins") return {Mins:(+value||0)};
+    if(field==="when") return {"Time Of Day":String(value)};
+    if(field==="order")return {Order:(+value||0)};
+    return {};
+  }
+  // properties for a brand-new routine page
+  function newRoutineProps(r){
+    r=r||{};
+    return {Routine:String(r.name||""),Active:"__YES__","Done Today":"__NO__",
+      "Time Of Day":String(r.when||"Morning"),Mins:(+r.mins||0),Why:String(r.why||""),Order:(+r.order||99)};
+  }
+  // swap one routine's Order with its neighbor in direction dir ∈ {-1,+1}
+  // returns [{id,order},...] writes needed (empty if no move possible). Pure.
+  function reorderSwap(routines, id, dir){
+    var s=(routines||[]).slice().sort(function(a,b){return a.order-b.order;});
+    var i=s.findIndex(function(r){return r.id===id;});
+    var j=i+dir; if(i<0||j<0||j>=s.length) return [];
+    var a=s[i],b=s[j];
+    return [{id:a.id,order:b.order},{id:b.id,order:a.order}];
+  }
+  // group tasks into the fixed areas, busiest-open first, empty areas last
+  function groupTasksByArea(tasks, areas){
+    var groups=(areas||[]).map(function(area,i){
+      var list=(tasks||[]).filter(function(t){return (t.area||"")===area;});
+      var open=list.filter(function(t){return !t.done;}).length;
+      return {area:area, tasks:list, open:open, _i:i};
+    });
+    groups.sort(function(a,b){ return (b.open-a.open) || (b.tasks.length-a.tasks.length) || (a._i-b._i); });
+    return groups;
   }
 
   return {
@@ -100,7 +136,11 @@
     mergeState: mergeState,
     replaceStateBlock: replaceStateBlock,
     applyOps: applyOps,
-    assertReadComplete: assertReadComplete
+    assertReadComplete: assertReadComplete,
+    routinePropsFor: routinePropsFor,
+    newRoutineProps: newRoutineProps,
+    reorderSwap: reorderSwap,
+    groupTasksByArea: groupTasksByArea
   };
 });
 /*__CC_DATA_END__*/

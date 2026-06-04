@@ -176,3 +176,99 @@ test("applyOps: cap op prepends capture", () => {
   assert.equal(result.caps[0].item, "idea");
   assert.equal(result.caps[0].id, null);
 });
+
+// ── Group 6: v1.4.0 routine editing + task grouping ──────────────────────
+const AREAS = ["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"];
+
+test("routinePropsFor: name → Routine title", () => {
+  assert.deepEqual(C.routinePropsFor("name","Water"), {Routine:"Water"});
+});
+test("routinePropsFor: why → Why", () => {
+  assert.deepEqual(C.routinePropsFor("why","Hydrate"), {Why:"Hydrate"});
+});
+test("routinePropsFor: mins → Mins number", () => {
+  assert.deepEqual(C.routinePropsFor("mins","5"), {Mins:5});
+});
+test("routinePropsFor: mins non-numeric → 0", () => {
+  assert.deepEqual(C.routinePropsFor("mins","abc"), {Mins:0});
+});
+test("routinePropsFor: when → Time Of Day", () => {
+  assert.deepEqual(C.routinePropsFor("when","Evening"), {"Time Of Day":"Evening"});
+});
+test("routinePropsFor: order → Order number", () => {
+  assert.deepEqual(C.routinePropsFor("order","3"), {Order:3});
+});
+test("routinePropsFor: unknown field → empty", () => {
+  assert.deepEqual(C.routinePropsFor("nope","x"), {});
+});
+
+test("newRoutineProps: full shape", () => {
+  assert.deepEqual(
+    C.newRoutineProps({name:"Stretch",when:"Evening",mins:10,why:"Mobility",order:4}),
+    {Routine:"Stretch",Active:"__YES__","Done Today":"__NO__","Time Of Day":"Evening",Mins:10,Why:"Mobility",Order:4}
+  );
+});
+test("newRoutineProps: defaults when sparse", () => {
+  assert.deepEqual(
+    C.newRoutineProps({name:"X"}),
+    {Routine:"X",Active:"__YES__","Done Today":"__NO__","Time Of Day":"Morning",Mins:0,Why:"",Order:99}
+  );
+});
+
+const RL = [{id:"a",order:1},{id:"b",order:2},{id:"c",order:3}];
+test("reorderSwap: middle down swaps with next", () => {
+  assert.deepEqual(C.reorderSwap(RL,"b",1), [{id:"b",order:3},{id:"c",order:2}]);
+});
+test("reorderSwap: middle up swaps with prev", () => {
+  assert.deepEqual(C.reorderSwap(RL,"b",-1), [{id:"b",order:1},{id:"a",order:2}]);
+});
+test("reorderSwap: top up → no move", () => {
+  assert.deepEqual(C.reorderSwap(RL,"a",-1), []);
+});
+test("reorderSwap: bottom down → no move", () => {
+  assert.deepEqual(C.reorderSwap(RL,"c",1), []);
+});
+test("reorderSwap: unknown id → no move", () => {
+  assert.deepEqual(C.reorderSwap(RL,"zzz",1), []);
+});
+
+test("groupTasksByArea: all 7 areas present even when empty", () => {
+  const g = C.groupTasksByArea([], AREAS);
+  assert.equal(g.length, 7);
+  assert.deepEqual(g.map(x => x.area).sort(), AREAS.slice().sort());
+});
+test("groupTasksByArea: tasks land in correct bucket", () => {
+  const g = C.groupTasksByArea([{area:"Finances",done:false}], AREAS);
+  const fin = g.find(x => x.area === "Finances");
+  assert.equal(fin.tasks.length, 1);
+});
+test("groupTasksByArea: busiest-open area first, empty last", () => {
+  const tasks = [
+    {area:"Health & Sleep",done:false},
+    {area:"Health & Sleep",done:false},
+    {area:"Finances",done:false}
+  ];
+  const g = C.groupTasksByArea(tasks, AREAS);
+  assert.equal(g[0].area, "Health & Sleep");   // 2 open → first
+  assert.equal(g[1].area, "Finances");          // 1 open → second
+  assert.equal(g[g.length-1].open, 0);          // empty area sinks last
+});
+test("groupTasksByArea: equal-open areas keep fixed AREAS order", () => {
+  const tasks = [
+    {area:"Finances",done:false},
+    {area:"Health & Sleep",done:false}
+  ];
+  const g = C.groupTasksByArea(tasks, AREAS);
+  // Health & Sleep precedes Finances in AREAS, so it wins the tie
+  const openOnes = g.filter(x => x.open === 1).map(x => x.area);
+  assert.deepEqual(openOnes, ["Health & Sleep","Finances"]);
+});
+
+test("applyOps: taskAdd honors chosen area", () => {
+  const r = C.applyOps({tasks:[]}, [{t:"taskAdd",tmpid:"t1",title:"X",area:"Finances"}]);
+  assert.equal(r.tasks[0].area, "Finances");
+});
+test("applyOps: taskAdd missing area falls back to Focus & Work", () => {
+  const r = C.applyOps({tasks:[]}, [{t:"taskAdd",tmpid:"t1",title:"X"}]);
+  assert.equal(r.tasks[0].area, "Focus & Work");
+});

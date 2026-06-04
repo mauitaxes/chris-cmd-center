@@ -8,7 +8,7 @@
   :root{
     color-scheme: dark;
     --bg:#070b11;--bg-grad-1:#0a0f17;--panel:#0d141d;--panel-2:#0f1822;--line:#1b2733;--line-soft:#16202b;
-    --txt:#c9d6e2;--txt-dim:#6b7c8d;--txt-faint:#44525f;
+    --txt:#f0f4f8;--txt-dim:#a7b6c4;--txt-faint:#7a8b9c;
     --cyan:#2ee6e6;--cyan-dim:#1aa3a3;--red:#ff3b5c;--amber:#ffb020;--green:#2bdd7e;--purple:#9b7bff;--blue:#5bb8e6;--yellow:#e6c84a;
     --mono:'JetBrains Mono','Consolas','SF Mono',Menlo,'DejaVu Sans Mono',monospace;
   }
@@ -136,7 +136,7 @@
     <div class="meta"><b>Today:</b> <span id="today-date">—</span> · Hawaii<br/><b>Status:</b> <span id="sync-status">loading…</span></div>
     <span class="clock" id="clock">--:--:--</span>
     <div class="spacer"></div>
-    <span class="badge-ver" id="badge-ver">v1.3.0<br/>Notion backend</span>
+    <span class="badge-ver" id="badge-ver">v1.4.0<br/>Notion backend</span>
     <button class="btn cyan" id="btn-brief">Brief</button>
     <button class="btn amber" id="btn-sync">Sync</button>
   </div>
@@ -251,6 +251,7 @@
               </div>
               <div class="quickadd">
                 <input class="ipt" id="qa-task" placeholder="+ Quick add a task — type, hit enter…" />
+                <select class="ipt" id="qa-task-area" style="flex:0 0 auto;max-width:160px;cursor:pointer;"></select>
                 <button class="btn cyan" id="qa-task-btn">Add</button>
               </div>
               <div id="task-list"><div class="empty">Loading tasks…</div></div>
@@ -316,14 +317,7 @@
 
     <div id="tab-tasks" class="hidden">
       <section>
-        <div class="card" style="padding:0;">
-          <div class="panel-head"><span class="panel-title">All Tasks</span><div class="spacer"></div><span class="count-chip" id="tasks-count2">—</span></div>
-          <div class="quickadd">
-            <input class="ipt" id="qa-task2" placeholder="+ Quick add a task — type, hit enter…" />
-            <button class="btn cyan" id="qa-task-btn2">Add</button>
-          </div>
-          <div id="task-list2"><div class="empty">Loading…</div></div>
-        </div>
+        <div id="task-sections" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;align-items:start;"><div class="empty">Loading…</div></div>
       </section>
     </div>
 
@@ -331,7 +325,7 @@
       <section>
         <div class="card" style="padding:0;">
           <div class="panel-head"><span class="panel-title">Routines</span><div class="spacer"></div><span class="count-chip" id="routine-count">—</span></div>
-          <div id="routine-list"><div class="empty">Loading routines…</div></div>
+          <div id="routine-editor"><div class="empty">Loading routines…</div></div>
         </div>
       </section>
     </div>
@@ -429,7 +423,7 @@
       if(op.t==="task"){var x=s.tasks.filter(function(z){return z.id===op.id;})[0]; if(x)x.done=op.done;}
       else if(op.t==="prio"){var xp=s.tasks.filter(function(z){return z.id===op.id;})[0]; if(xp)xp.priority=op.priority;}
       else if(op.t==="routine"){s.routines=s.routines||[]; var r=s.routines.filter(function(z){return z.id===op.id;})[0]; if(r)r.done=op.done;}
-      else if(op.t==="taskAdd"){ if(!s.tasks.some(function(z){return z.id===op.tmpid;})) s.tasks.unshift({id:op.tmpid,title:op.title,area:"Focus & Work",done:false,priority:false,due:"",energy:"",time:""}); }
+      else if(op.t==="taskAdd"){ if(!s.tasks.some(function(z){return z.id===op.tmpid;})) s.tasks.unshift({id:op.tmpid,title:op.title,area:op.area||"Focus & Work",done:false,priority:false,due:"",energy:"",time:""}); }
       else if(op.t==="win"){ s.wins.unshift({title:op.title,date:op.date}); }
       else if(op.t==="cap"){ s.caps.unshift({id:null,item:op.item}); }
       else if(op.t==="focus"){ s.focusMinutesToday=(+s.focusMinutesToday||0)+op.min; }
@@ -440,6 +434,37 @@
     var have={}; (rows||[]).forEach(function(r){ have[r.id]=1; });
     var missing=(ids||[]).filter(function(id){ return !have[id]; });
     return { ok: missing.length===0, missing: missing };
+  }
+
+  // -- Group 6: routine editing + task grouping (v1.4.0) --
+  function routinePropsFor(field, value){
+    if(field==="name") return {Routine:String(value)};
+    if(field==="why")  return {Why:String(value)};
+    if(field==="mins") return {Mins:(+value||0)};
+    if(field==="when") return {"Time Of Day":String(value)};
+    if(field==="order")return {Order:(+value||0)};
+    return {};
+  }
+  function newRoutineProps(r){
+    r=r||{};
+    return {Routine:String(r.name||""),Active:"__YES__","Done Today":"__NO__",
+      "Time Of Day":String(r.when||"Morning"),Mins:(+r.mins||0),Why:String(r.why||""),Order:(+r.order||99)};
+  }
+  function reorderSwap(routines, id, dir){
+    var s=(routines||[]).slice().sort(function(a,b){return a.order-b.order;});
+    var i=s.findIndex(function(r){return r.id===id;});
+    var j=i+dir; if(i<0||j<0||j>=s.length) return [];
+    var a=s[i],b=s[j];
+    return [{id:a.id,order:b.order},{id:b.id,order:a.order}];
+  }
+  function groupTasksByArea(tasks, areas){
+    var groups=(areas||[]).map(function(area,i){
+      var list=(tasks||[]).filter(function(t){return (t.area||"")===area;});
+      var open=list.filter(function(t){return !t.done;}).length;
+      return {area:area, tasks:list, open:open, _i:i};
+    });
+    groups.sort(function(a,b){ return (b.open-a.open) || (b.tasks.length-a.tasks.length) || (a._i-b._i); });
+    return groups;
   }
 
   return {
@@ -453,7 +478,11 @@
     mergeState: mergeState,
     replaceStateBlock: replaceStateBlock,
     applyOps: applyOps,
-    assertReadComplete: assertReadComplete
+    assertReadComplete: assertReadComplete,
+    routinePropsFor: routinePropsFor,
+    newRoutineProps: newRoutineProps,
+    reorderSwap: reorderSwap,
+    groupTasksByArea: groupTasksByArea
   };
 });
 /*__CC_DATA_END__*/
@@ -463,6 +492,7 @@
   var STATE_PAGE="37478f3d-415b-814c-8c65-dd76b6ab9aa3";
   var DBS={tasks:"fb432308-59b9-4078-92db-a83c6279957d",wins:"f99a9128-9809-48b9-9cb6-870717bd5183",routines:"17f7f036-e24c-40ce-9d41-db5d8a66b618",capture:"35ba4e31-eca6-4ab7-8625-acc41d5341e8",focusSessions:"291cb585-746e-4195-a920-b0ac460fbbf6"};
   var AREA_TAG={"Focus & Work":"purple","Daily Routines":"green","Health & Sleep":"amber","Finances":"yellow","Home & Space":"blue","Relationships":"red","Claude Tasks":"cyan"};
+  var AREAS=["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"];
 
   // ---- Embedded snapshot (real data) so the dashboard is never blank, even before the live bridge connects ----
   /*__SNAPSHOT_START__*/var SNAPSHOT={
@@ -473,7 +503,6 @@
       {id:"37478f3d-415b-81ab-b9b0-f6925e4c58b4",name:"Coffee or tea",when:"Morning",mins:5,why:"Your earned reward for getting up",order:3,done:false},
       {id:"37478f3d-415b-819c-82eb-f99406c32b3b",name:"Quick movement",when:"Morning",mins:10,why:"5–10 min walk, stretch, or anything physical",order:4,done:false},
       {id:"37478f3d-415b-81d6-8af9-e52e519cabe7",name:"Get dressed & ready",when:"Morning",mins:15,why:"Clothes laid out the night before",order:5,done:false},
-      {id:"37478f3d-415b-81b0-b1bd-c9f6f96d071c",name:"Set today's top 3",when:"Morning",mins:5,why:"Write your 3 most important tasks for the day",order:6,done:false},
       {id:"37478f3d-415b-812b-aed8-cd41738fe375",name:"One small win",when:"Morning",mins:2,why:"Do one tiny thing that builds momentum",order:7,done:false},
       {id:"37478f3d-415b-814b-9feb-ea14b8c70a67",name:"Evening shutdown — plan tomorrow",when:"Evening",mins:10,why:"Lay out tomorrow's top 3 and clothes",order:8,done:false}
     ],
@@ -599,7 +628,7 @@
       if(op.t==="task"){var x=app.tasks.filter(function(z){return z.id===op.id;})[0];if(x)x.done=op.done;}
       else if(op.t==="prio"){var xp=app.tasks.filter(function(z){return z.id===op.id;})[0];if(xp)xp.priority=op.priority;}
       else if(op.t==="routine"){var r=app.routines.filter(function(z){return z.id===op.id;})[0];if(r)r.done=op.done;}
-      else if(op.t==="taskAdd"){app.tasks.unshift({id:op.tmpid,title:op.title,area:"Focus & Work",done:false,priority:false,due:"",energy:"",time:""});}
+      else if(op.t==="taskAdd"){app.tasks.unshift({id:op.tmpid,title:op.title,area:op.area||"Focus & Work",done:false,priority:false,due:"",energy:"",time:""});}
       else if(op.t==="win"){app.wins.unshift({title:op.title,date:op.date});}
       else if(op.t==="cap"){app.caps.unshift({id:null,item:op.item});}
       else if(op.t==="focus"){app.state.focusMinutesToday=(+app.state.focusMinutesToday||0)+op.min;}
@@ -644,7 +673,7 @@
       if(op.t==="task")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Done:op.done?"__YES__":"__NO__"}});
       else if(op.t==="prio")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Priority:op.priority?"__YES__":"__NO__"}});
       else if(op.t==="routine")await call(T.update,{page_id:op.id,command:"update_properties",properties:{"Done Today":op.done?"__YES__":"__NO__"}});
-      else if(op.t==="taskAdd")await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:op.title,Area:"Focus & Work",Done:"__NO__","date:Created:start":todayHST()}}]});
+      else if(op.t==="taskAdd")await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:op.title,Area:op.area||"Focus & Work",Done:"__NO__","date:Created:start":todayHST()}}]});
       else if(op.t==="win")await call(T.create,{parent:{data_source_id:DBS.wins},pages:[{properties:{Win:op.title,"date:Date:start":op.date}}]});
       else if(op.t==="cap")await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:op.item,Processed:"__NO__","date:Captured:start":todayHST()}}]});
       else if(op.t==="focus")await call(T.create,{parent:{data_source_id:DBS.focusSessions},pages:[{properties:{Session:"Focus "+op.min+"m "+todayHST(),"date:Date:start":todayHST(),Minutes:op.min,Type:"Focus"}}]});
@@ -684,13 +713,13 @@
     if(app.mode==="live"){try{await call(T.update,{page_id:t.id,command:"update_properties",properties:{Priority:t.priority?"__YES__":"__NO__"}});lsRemove({t:"prio",id:t.id,priority:t.priority});}catch(e){}}
   }
   async function toggleRoutine(r){
-    r.done=!r.done;renderSteps();renderRoutines();renderTopStats();
+    r.done=!r.done;renderSteps();renderRoutineEditor();renderTopStats();
     lsPush({t:"routine",id:r.id,done:r.done});
     if(app.mode==="live"){try{await call(T.update,{page_id:r.id,command:"update_properties",properties:{"Done Today":r.done?"__YES__":"__NO__","date:Last Done:start":r.done?todayHST():null}});lsRemove({t:"routine",id:r.id,done:r.done});}catch(e){}}
   }
-  async function addTask(title){title=(title||"").trim();if(!title)return;var tmp="tmp-"+Date.now();app.tasks.unshift({id:tmp,title:title,area:"Focus & Work",done:false,priority:false,due:"",energy:"",time:""});renderTasks();renderTopStats();toast("Task added");
-    lsPush({t:"taskAdd",title:title,tmpid:tmp});
-    if(app.mode==="live"){try{var r=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:title,Area:"Focus & Work",Done:"__NO__","date:Created:start":todayHST()}}]});var o=toObj(r);var id=o&&o.pages&&o.pages[0]&&o.pages[0].id;if(id){app.tasks[0].id=id;lsRemove({t:"taskAdd",title:title,tmpid:tmp});}}catch(e){}}
+  async function addTask(title,area){title=(title||"").trim();if(!title)return;area=area||"Focus & Work";var tmp="tmp-"+Date.now();app.tasks.unshift({id:tmp,title:title,area:area,done:false,priority:false,due:"",energy:"",time:""});renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();renderTopStats();toast("Task added");
+    lsPush({t:"taskAdd",title:title,tmpid:tmp,area:area});
+    if(app.mode==="live"){try{var r=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:title,Area:area,Done:"__NO__","date:Created:start":todayHST()}}]});var o=toObj(r);var id=o&&o.pages&&o.pages[0]&&o.pages[0].id;if(id){app.tasks[0].id=id;lsRemove({t:"taskAdd",title:title,tmpid:tmp});}}catch(e){}}
   }
   async function addCapture(item){item=(item||"").trim();if(!item)return;app.caps.unshift({id:null,item:item});renderCaps();renderTopStats();toast("Captured");
     lsPush({t:"cap",item:item});
@@ -722,45 +751,106 @@
     var done=st.filter(function(r){return r.done;}).length;
     if($("step-count"))$("step-count").textContent=done+" of "+st.length+" done";
   }
+  function taskRowHtml(t){
+    var today=hstDate();var tags=[];
+    if(t.area)tags.push('<span class="tag '+(AREA_TAG[t.area]||"")+'">'+esc(t.area)+'</span>');
+    if(t.energy)tags.push('<span class="tag '+(t.energy==="High"?"amber":t.energy==="Low"?"green":"cyan")+'">'+esc(t.energy)+' energy</span>');
+    if(t.time)tags.push('<span class="tag cyan">'+esc(t.time)+'</span>');
+    var right;
+    if(t.done)right='done';
+    else if(t.due&&t.due<today)right='overdue<br/><span class="c-red">'+esc(prettyDate(t.due))+'</span>';
+    else if(t.due===today)right='due<br/><span class="c-amber">today</span>';
+    else if(t.due)right='due<br/>'+esc(prettyDate(t.due));
+    else right='open';
+    return '<div class="ti '+(t.done?"is-done":"")+'">'+
+      '<div class="chk '+(t.done?"on":"")+'" data-act="task" data-id="'+esc(t.id)+'">'+(t.done?"✓":"")+'</div>'+
+      '<div class="name" style="grid-column:2;"><span class="ptog '+(t.priority?"on":"")+'" data-act="prio" data-id="'+esc(t.id)+'" title="Toggle priority" role="button" aria-label="Toggle priority">★</span> '+esc(t.title)+'</div>'+
+      '<div class="right">'+right+'</div>'+
+      (tags.length?'<div class="tags">'+tags.join("")+'</div>':"")+'</div>';
+  }
   function renderTasks(){
-    var today=hstDate();var html;
+    var html;
     if(!app.tasks.length){html='<div class="empty">No tasks loaded.</div>';}
-    else{html=app.tasks.map(function(t){
-      var tags=[];
-      if(t.area)tags.push('<span class="tag '+(AREA_TAG[t.area]||"")+'">'+esc(t.area)+'</span>');
-      if(t.energy)tags.push('<span class="tag '+(t.energy==="High"?"amber":t.energy==="Low"?"green":"cyan")+'">'+esc(t.energy)+' energy</span>');
-      if(t.time)tags.push('<span class="tag cyan">'+esc(t.time)+'</span>');
-      var right;
-      if(t.done)right='done';
-      else if(t.due&&t.due<today)right='overdue<br/><span class="c-red">'+esc(prettyDate(t.due))+'</span>';
-      else if(t.due===today)right='due<br/><span class="c-amber">today</span>';
-      else if(t.due)right='due<br/>'+esc(prettyDate(t.due));
-      else right='open';
-      return '<div class="ti '+(t.done?"is-done":"")+'">'+
-        '<div class="chk '+(t.done?"on":"")+'" data-act="task" data-id="'+esc(t.id)+'">'+(t.done?"✓":"")+'</div>'+
-        '<div class="name" style="grid-column:2;"><span class="ptog '+(t.priority?"on":"")+'" data-act="prio" data-id="'+esc(t.id)+'" title="Toggle priority" role="button" aria-label="Toggle priority">★</span> '+esc(t.title)+'</div>'+
-        '<div class="right">'+right+'</div>'+
-        (tags.length?'<div class="tags">'+tags.join("")+'</div>':"")+'</div>';
-    }).join("");}
+    else{html=app.tasks.map(taskRowHtml).join("");}
     if($("task-list"))$("task-list").innerHTML=html;
-    if($("task-list2"))$("task-list2").innerHTML=html;
     var done=app.tasks.filter(function(t){return t.done;}).length;
     var prio=app.tasks.filter(function(t){return t.priority&&!t.done;}).length;
     var cc=done+" of "+app.tasks.length+" done · "+prio+" priority";
-    if($("task-count"))$("task-count").textContent=cc;if($("tasks-count2"))$("tasks-count2").textContent=cc;
+    if($("task-count"))$("task-count").textContent=cc;
   }
-  function renderRoutines(){
-    var l=$("routine-list");if(!l)return;
-    if(!app.routines.length){l.innerHTML='<div class="empty">No routines.</div>';}
-    else{l.innerHTML=app.routines.map(function(r){
-      return '<div class="step '+(r.done?"is-done":"")+'">'+
-        '<div class="chk '+(r.done?"on":"")+'" data-act="routine" data-id="'+esc(r.id)+'">'+(r.done?"✓":"")+'</div>'+
-        '<div class="nm" style="grid-column:2;">'+esc(r.name)+'</div>'+
-        '<div class="mins">'+esc(r.when||"")+(r.mins?(" · ~"+r.mins+"m"):"")+'</div>'+
-        (r.why?'<div class="why">'+esc(r.why)+'</div>':"")+'</div>';
-    }).join("");}
-    var rd=app.routines.filter(function(r){return r.done;}).length;
-    if($("routine-count"))$("routine-count").textContent=rd+" of "+app.routines.length+" done today";
+  function renderTaskSections(){
+    var host=$("task-sections");if(!host)return;
+    var groups=CCData.groupTasksByArea(app.tasks,AREAS);
+    host.innerHTML=groups.map(function(g){
+      var done=g.tasks.filter(function(t){return t.done;}).length;
+      var dot='<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--'+(AREA_TAG[g.area]||"cyan")+',#5cc8ff);margin-right:7px;vertical-align:middle;"></span>';
+      var rows=g.tasks.length?g.tasks.map(taskRowHtml).join(""):'<div class="empty">No tasks.</div>';
+      return '<div class="card" style="padding:0;">'+
+        '<div class="panel-head">'+dot+'<span class="panel-title">'+esc(g.area)+'</span><div class="spacer"></div><span class="count-chip">'+done+'/'+g.tasks.length+'</span></div>'+
+        '<div class="quickadd"><input class="ipt" data-sec-area="'+esc(g.area)+'" placeholder="+ Add to '+esc(g.area)+'…" /><button class="btn cyan" data-act="task-add-section" data-area="'+esc(g.area)+'">Add</button></div>'+
+        '<div>'+rows+'</div>'+
+      '</div>';
+    }).join("");
+  }
+  var WHEN_OPTS=["Morning","Afternoon","Evening","Anytime"];
+  function renderRoutineEditor(){
+    var host=$("routine-editor");if(!host)return;
+    var sorted=app.routines.slice().sort(function(a,b){return a.order-b.order;});
+    function whenSel(val,id){return '<select class="ipt" data-act="routine-edit" data-id="'+esc(id)+'" data-field="when" style="flex:0 0 auto;max-width:120px;cursor:pointer;">'+WHEN_OPTS.map(function(o){return '<option'+(o===val?' selected':'')+'>'+o+'</option>';}).join("")+'</select>';}
+    var rows=sorted.length?sorted.map(function(r){
+      return '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line-soft);">'+
+        '<input class="ipt" style="flex:2 1 150px;" data-act="routine-edit" data-id="'+esc(r.id)+'" data-field="name" value="'+esc(r.name||"")+'" placeholder="Routine name" />'+
+        whenSel(r.when||"Morning",r.id)+
+        '<input class="ipt" type="number" min="0" style="flex:0 0 64px;width:64px;" data-act="routine-edit" data-id="'+esc(r.id)+'" data-field="mins" value="'+(+r.mins||0)+'" title="Minutes" />'+
+        '<input class="ipt" style="flex:3 1 180px;" data-act="routine-edit" data-id="'+esc(r.id)+'" data-field="why" value="'+esc(r.why||"")+'" placeholder="Why (optional)" />'+
+        '<button class="btn" data-act="routine-up" data-id="'+esc(r.id)+'" title="Move up">↑</button>'+
+        '<button class="btn" data-act="routine-down" data-id="'+esc(r.id)+'" title="Move down">↓</button>'+
+        '<button class="btn" data-act="routine-remove" data-id="'+esc(r.id)+'" title="Remove" style="color:var(--red);border-color:rgba(255,59,92,.4);">✕</button>'+
+      '</div>';
+    }).join(""):'<div class="empty">No routines yet — add one below.</div>';
+    var addForm='<div class="quickadd" style="flex-wrap:wrap;">'+
+      '<input class="ipt" id="radd-name" style="flex:2 1 150px;" placeholder="+ New routine name…" />'+
+      '<select class="ipt" id="radd-when" style="flex:0 0 auto;max-width:120px;cursor:pointer;">'+WHEN_OPTS.map(function(o){return '<option'+(o==="Morning"?' selected':'')+'>'+o+'</option>';}).join("")+'</select>'+
+      '<input class="ipt" id="radd-mins" type="number" min="0" value="5" style="flex:0 0 64px;width:64px;" title="Minutes" />'+
+      '<input class="ipt" id="radd-why" style="flex:3 1 180px;" placeholder="Why (optional)…" />'+
+      '<button class="btn cyan" data-act="routine-add">Add Routine</button>'+
+    '</div>';
+    host.innerHTML=rows+addForm;
+    if($("routine-count"))$("routine-count").textContent=app.routines.length+" routine"+(app.routines.length===1?"":"s");
+  }
+  async function editRoutine(id,field,value){
+    if(app.mode!=="live")return toast("Connect to edit routines");
+    var r=app.routines.filter(function(x){return x.id===id;})[0];if(!r)return;
+    if(field==="name")r.name=value;else if(field==="why")r.why=value;
+    else if(field==="mins")r.mins=+value||0;else if(field==="when")r.when=value;
+    else if(field==="order")r.order=+value||0;
+    renderSteps();renderTopStats();
+    try{await call(T.update,{page_id:id,command:"update_properties",properties:CCData.routinePropsFor(field,value)});}
+    catch(e){toast("Save failed");}
+  }
+  async function addRoutine(r){
+    if(app.mode!=="live")return toast("Connect to edit routines");
+    try{
+      var res=await call(T.create,{parent:{data_source_id:DBS.routines},pages:[{properties:CCData.newRoutineProps(r)}]});
+      var o=toObj(res),id=o&&o.pages&&o.pages[0]&&o.pages[0].id;
+      app.routines.push({id:id||("tmp-"+Date.now()),name:r.name,why:r.why||"",mins:+r.mins||0,when:r.when||"Morning",order:+r.order||99,done:false,active:true});
+      app.routines.sort(function(a,b){return a.order-b.order;});
+      renderRoutineEditor();renderSteps();renderTopStats();toast("Routine added");
+    }catch(e){toast("Add failed");}
+  }
+  async function removeRoutine(id){
+    if(app.mode!=="live")return toast("Connect to edit routines");
+    app.routines=app.routines.filter(function(x){return x.id!==id;});
+    renderRoutineEditor();renderSteps();renderTopStats();toast("Routine removed");
+    try{await call(T.update,{page_id:id,command:"update_properties",properties:{Active:"__NO__"}});}catch(e){}
+  }
+  async function moveRoutine(id,dir){
+    if(app.mode!=="live")return toast("Connect to edit routines");
+    var writes=CCData.reorderSwap(app.routines,id,dir);if(!writes.length)return;
+    writes.forEach(function(w){var r=app.routines.filter(function(x){return x.id===w.id;})[0];if(r)r.order=w.order;});
+    app.routines.sort(function(a,b){return a.order-b.order;});
+    renderRoutineEditor();renderSteps();
+    try{for(var i=0;i<writes.length;i++){await call(T.update,{page_id:writes[i].id,command:"update_properties",properties:{Order:writes[i].order}});}}catch(e){}
   }
   function renderCaps(){var l=$("cap-list");if(!l)return;if(!app.caps.length){l.innerHTML='<div class="empty" style="padding:6px 0;">Nothing captured yet.</div>';}else{l.innerHTML=app.caps.slice(0,8).map(function(c){return '<div class="brain-item"><span class="d">›</span> '+esc(c.item)+' <span class="spacer"></span><span class="tag">unsorted</span></div>';}).join("");}}
   function renderWins(){
@@ -796,7 +886,7 @@
     var sn=app.state.lastStreakDate===today?"Streak secured for today":("Streak needs"+(needTask?" 1 task":"")+(needTask&&needWin?" +":"")+(needWin?" 1 win":"")+" today");
     $("mom-note").textContent=sn+" · "+open+" open ("+prio+" priority) · "+focus+" focus min";
   }
-  function renderAll(){renderSteps();renderTasks();renderRoutines();renderCaps();renderWins();renderTopStats();}
+  function renderAll(){renderSteps();renderTasks();renderTaskSections();renderRoutineEditor();renderCaps();renderWins();renderTopStats();}
 
   function tick(){var p=hstParts();$("clock").textContent=p.hour+":"+p.minute+":"+p.second;var s=(23-(+p.hour))*3600+(59-(+p.minute))*60+(59-(+p.second));var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);$("reset-countdown").textContent=String(h).padStart(2,"0")+":"+String(m).padStart(2,"0");}
 
@@ -820,11 +910,24 @@
     else{try{alert(lines.join("\n"));}catch(e){}}
   }
 
+  function initAreaPicker(){var sel=$("qa-task-area");if(!sel)return;var last="Focus & Work";try{last=localStorage.getItem("cc_lastArea")||last;}catch(e){}sel.innerHTML=AREAS.map(function(a){return '<option'+(a===last?' selected':'')+'>'+esc(a)+'</option>';}).join("");}
   function wire(){
     document.querySelectorAll(".tab").forEach(function(tb){tb.addEventListener("click",function(){document.querySelectorAll(".tab").forEach(function(x){x.classList.remove("active");});tb.classList.add("active");["today","tasks","routine","wins"].forEach(function(n){$("tab-"+n).classList.add("hidden");});$("tab-"+tb.getAttribute("data-tab")).classList.remove("hidden");});});
     document.body.addEventListener("click",function(e){var el=e.target.closest("[data-act]");if(!el)return;var act=el.getAttribute("data-act"),id=el.getAttribute("data-id");if(act==="task"){var t=app.tasks.filter(function(x){return x.id===id;})[0];if(t)toggleTask(t);}if(act==="routine"){var r=app.routines.filter(function(x){return x.id===id;})[0];if(r)toggleRoutine(r);}if(act==="prio"){var tp=app.tasks.filter(function(x){return x.id===id;})[0];if(tp)togglePriority(tp);}});
     function bindAdd(inp,btn,fn){var i=$(inp);var b=$(btn);if(b)b.addEventListener("click",function(){fn(i.value);i.value="";});if(i)i.addEventListener("keydown",function(e){if(e.key==="Enter"){fn(i.value);i.value="";}});}
-    bindAdd("qa-task","qa-task-btn",addTask);bindAdd("qa-task2","qa-task-btn2",addTask);bindAdd("qa-cap","qa-cap-btn",addCapture);bindAdd("qa-win","qa-win-btn",addWin);
+    initAreaPicker();
+    (function(){var i=$("qa-task"),b=$("qa-task-btn"),sel=$("qa-task-area");function go(){var area=sel?sel.value:"Focus & Work";try{localStorage.setItem("cc_lastArea",area);}catch(e){}addTask(i.value,area);i.value="";}if(b)b.addEventListener("click",go);if(i)i.addEventListener("keydown",function(e){if(e.key==="Enter")go();});})();
+    bindAdd("qa-cap","qa-cap-btn",addCapture);bindAdd("qa-win","qa-win-btn",addWin);
+    (function(){var host=$("task-sections");if(!host)return;function addFromInput(inp){if(!inp)return;var area=inp.getAttribute("data-sec-area")||"Focus & Work";addTask(inp.value,area);inp.value="";}host.addEventListener("click",function(e){var b=e.target.closest('[data-act="task-add-section"]');if(!b)return;var area=b.getAttribute("data-area");var inp=host.querySelector('input[data-sec-area="'+area+'"]');addFromInput(inp);});host.addEventListener("keydown",function(e){if(e.key!=="Enter")return;var inp=e.target.closest('input[data-sec-area]');if(inp)addFromInput(inp);});})();
+    (function(){var host=$("routine-editor");if(!host)return;
+      host.addEventListener("change",function(e){var el=e.target.closest('[data-act="routine-edit"]');if(!el)return;editRoutine(el.getAttribute("data-id"),el.getAttribute("data-field"),el.value);});
+      host.addEventListener("click",function(e){var el=e.target.closest("[data-act]");if(!el)return;var act=el.getAttribute("data-act"),id=el.getAttribute("data-id");
+        if(act==="routine-up")moveRoutine(id,-1);
+        else if(act==="routine-down")moveRoutine(id,1);
+        else if(act==="routine-remove")removeRoutine(id);
+        else if(act==="routine-add"){var nm=(($("radd-name")||{}).value||"").trim();if(!nm)return toast("Name required");var maxO=app.routines.reduce(function(m,r){return Math.max(m,+r.order||0);},0);addRoutine({name:nm,when:($("radd-when")||{}).value||"Morning",mins:+(($("radd-mins")||{}).value||0),why:($("radd-why")||{}).value||"",order:maxO+1});}
+      });
+    })();
     $("t-start").addEventListener("click",startTimer);$("t-reset").addEventListener("click",resetTimer);$("t-5").addEventListener("click",add5);
     $("btn-brief").addEventListener("click",openBrief);$("btn-fullbrief").addEventListener("click",openBrief);
     $("btn-sync").addEventListener("click",function(){boot(true);});
