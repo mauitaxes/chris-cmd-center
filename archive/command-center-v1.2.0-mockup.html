@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Command Center — v1.2.0 (mockup)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap');
+  :root{
+    --bg:#070b11;--bg-grad-1:#0a0f17;--panel:#0d141d;--panel-2:#0f1822;--line:#1b2733;--line-soft:#16202b;
+    --txt:#c9d6e2;--txt-dim:#6b7c8d;--txt-faint:#44525f;
+    --cyan:#2ee6e6;--cyan-dim:#1aa3a3;--red:#ff3b5c;--amber:#ffb020;--green:#2bdd7e;--purple:#9b7bff;
+    --mono:'JetBrains Mono','Consolas','SF Mono',Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:var(--mono);color:var(--txt);letter-spacing:.02em;-webkit-font-smoothing:antialiased;padding-bottom:60px;min-height:100vh;
+    background:radial-gradient(1200px 600px at 80% -10%,#0c1722 0%,transparent 60%),linear-gradient(180deg,var(--bg-grad-1),var(--bg));}
+  .wrap{max-width:1480px;margin:0 auto;padding:0 22px;}
+
+  /* top bar */
+  .topbar{display:flex;align-items:center;gap:18px;padding:16px 22px;border-bottom:1px solid var(--line);flex-wrap:wrap;}
+  .brand{display:flex;align-items:center;gap:14px;}
+  .logo{font-size:22px;font-weight:700;letter-spacing:.04em;color:var(--cyan);text-shadow:0 0 14px rgba(46,230,230,.45);}
+  .logo .b{color:#e8f6f6;}
+  .subtitle{font-size:10px;line-height:1.4;color:var(--txt-dim);text-transform:uppercase;letter-spacing:.12em;}
+  .pill{display:inline-flex;align-items:center;gap:7px;font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.12em;padding:7px 11px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--txt-dim);white-space:nowrap;}
+  .pill .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .pill.live{color:var(--green);border-color:rgba(43,221,126,.35);}
+  .pill.muted .dot{background:var(--txt-faint);box-shadow:none;animation:none;}
+  .meta{font-size:11px;color:var(--txt-faint);line-height:1.5;}
+  .meta b{color:var(--txt-dim);font-weight:500;}
+  .clock{font-size:15px;color:var(--cyan);letter-spacing:.06em;}
+  .badge-ver{font-size:10px;line-height:1.3;padding:7px 11px;border-radius:6px;border:1px solid var(--cyan-dim);color:var(--cyan);background:rgba(46,230,230,.06);text-transform:uppercase;letter-spacing:.1em;}
+  .spacer{flex:1;}
+  .btn{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.12em;text-transform:uppercase;padding:9px 13px;border-radius:6px;cursor:pointer;background:var(--panel);color:var(--txt-dim);border:1px solid var(--line);transition:.15s;}
+  .btn:hover{color:var(--txt);background:var(--panel-2);}
+  .btn.cyan{color:var(--cyan);border-color:var(--cyan-dim);}
+  .btn.amber{color:var(--amber);border-color:rgba(255,176,32,.4);}
+
+  /* tabs */
+  .tabs{display:flex;gap:26px;padding:16px 22px 0;border-bottom:1px solid var(--line);}
+  .tab{font-size:12px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-faint);padding:0 4px 14px;cursor:pointer;display:flex;align-items:center;gap:8px;border-bottom:2px solid transparent;margin-bottom:-1px;}
+  .tab.active{color:var(--cyan);border-bottom-color:var(--cyan);}
+
+  section{padding:24px 0 0;}
+  .row{display:grid;gap:18px;}
+  .r-gauges{grid-template-columns:repeat(3,1fr) repeat(3,1fr);}
+  @media(max-width:1100px){.r-gauges{grid-template-columns:repeat(3,1fr);}}
+  @media(max-width:680px){.r-gauges{grid-template-columns:repeat(2,1fr);}}
+  .card{background:linear-gradient(180deg,var(--panel-2),var(--panel));border:1px solid var(--line);border-radius:12px;padding:22px 20px;}
+  .card.tall{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:240px;}
+
+  .gauge-wrap{position:relative;width:148px;height:148px;}
+  .gauge-val{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;}
+  .gauge-num{font-size:34px;font-weight:700;line-height:1;}
+  .gauge-den{font-size:11px;color:var(--txt-faint);margin-top:3px;}
+  .gauge-label{margin-top:16px;font-size:13px;font-weight:500;letter-spacing:.14em;text-transform:uppercase;text-align:center;}
+  .gauge-sub{margin-top:6px;font-size:10px;color:var(--txt-faint);text-transform:uppercase;letter-spacing:.1em;text-align:center;}
+
+  .stat-label{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--txt-dim);}
+  .stat-num{font-size:40px;font-weight:700;line-height:1.1;margin-top:14px;}
+  .stat-sub{font-size:11px;color:var(--txt-faint);margin-top:4px;}
+  .stat-divider{height:1px;background:var(--line-soft);margin:20px 0 16px;}
+  .stat-num.sm{font-size:26px;}
+
+  .c-cyan{color:var(--cyan);}.c-red{color:var(--red);}.c-amber{color:var(--amber);}.c-green{color:var(--green);}.c-purple{color:var(--purple);}
+
+  /* hero / brief */
+  .hero{display:flex;align-items:center;gap:28px;margin-top:18px;}
+  .hero-ring{width:92px;height:92px;position:relative;flex-shrink:0;}
+  .hero-ring .gauge-val .gauge-num{font-size:26px;}
+  .hero-text h3{font-size:13px;letter-spacing:.16em;text-transform:uppercase;color:var(--txt-dim);font-weight:500;}
+  .hero-status{font-size:30px;font-weight:700;margin-top:8px;}
+  .hero-note{font-size:12px;color:var(--txt-faint);margin-top:6px;}
+
+  /* main layout: prominent task list + support rail */
+  .main{display:grid;grid-template-columns:1.7fr 1fr;gap:18px;}
+  @media(max-width:960px){.main{grid-template-columns:1fr;}}
+
+  .panel-head{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line);}
+  .panel-title{font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;}
+  .count-chip{font-size:10px;color:var(--txt-faint);letter-spacing:.08em;}
+
+  /* quick add */
+  .quickadd{display:flex;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line-soft);align-items:center;}
+  .quickadd input{flex:1;font-family:var(--mono);font-size:13px;background:#0a121b;border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:11px 14px;outline:none;}
+  .quickadd input::placeholder{color:var(--txt-faint);}
+  .quickadd input:focus{border-color:var(--cyan-dim);}
+
+  /* task row */
+  .ti{display:grid;grid-template-columns:22px 1fr auto;gap:0 14px;align-items:start;padding:14px 18px;border-bottom:1px solid var(--line-soft);}
+  .ti:last-child{border-bottom:none;}
+  .chk{width:18px;height:18px;border-radius:5px;border:1.5px solid var(--line);cursor:pointer;margin-top:2px;}
+  .chk.on{background:var(--green);border-color:var(--green);}
+  .ti .name{font-size:14px;font-weight:500;display:flex;align-items:center;gap:9px;}
+  .ti.is-done .name{color:var(--txt-faint);text-decoration:line-through;}
+  .ti .star{color:var(--amber);font-size:12px;}
+  .ti .tags{grid-column:2;display:flex;gap:7px;margin-top:9px;flex-wrap:wrap;}
+  .ti .right{text-align:right;font-size:10px;color:var(--txt-faint);letter-spacing:.06em;line-height:1.5;}
+  .tag{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 7px;border-radius:4px;border:1px solid var(--line);color:var(--txt-dim);}
+  .tag.red{background:rgba(255,59,92,.12);color:var(--red);border-color:rgba(255,59,92,.3);}
+  .tag.amber{background:rgba(255,176,32,.12);color:var(--amber);border-color:rgba(255,176,32,.3);}
+  .tag.cyan{background:rgba(46,230,230,.1);color:var(--cyan);border-color:rgba(46,230,230,.3);}
+  .tag.green{background:rgba(43,221,126,.1);color:var(--green);border-color:rgba(43,221,126,.3);}
+  .tag.purple{background:rgba(155,123,255,.12);color:var(--purple);border-color:rgba(155,123,255,.3);}
+  .tag.blue{background:rgba(46,160,230,.12);color:#5bb8e6;border-color:rgba(46,160,230,.3);}
+
+  /* support rail */
+  .col-gap{margin-top:18px;}
+  .timer{display:flex;align-items:center;gap:20px;padding:18px 20px;}
+  .timer .ring{width:84px;height:84px;position:relative;flex-shrink:0;}
+  .timer .ring .v{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:700;color:var(--cyan);}
+  .timer .t-info .lab{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--txt-dim);}
+  .timer .t-info .st{font-size:14px;margin-top:6px;color:var(--txt);}
+  .timer .t-info .sub{font-size:11px;color:var(--txt-faint);margin-top:4px;}
+  .timer-actions{display:flex;gap:8px;padding:0 20px 18px;}
+
+  .section-label{font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--txt-faint);margin:0 0 12px 0;}
+  .capture{display:flex;gap:10px;padding:0 0 12px;align-items:center;}
+  .capture input{flex:1;font-family:var(--mono);font-size:13px;background:#0a121b;border:1px solid var(--line);border-radius:8px;color:var(--txt);padding:10px 13px;outline:none;}
+  .capture input::placeholder{color:var(--txt-faint);}
+  .capture input:focus{border-color:var(--cyan-dim);}
+  .brain-item{font-size:12px;color:var(--txt-dim);padding:9px 0;border-bottom:1px solid var(--line-soft);display:flex;gap:10px;align-items:center;}
+  .brain-item:last-child{border-bottom:none;}
+  .brain-item .d{color:var(--txt-faint);}
+  .win-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--line-soft);font-size:13px;}
+  .win-row:last-child{border-bottom:none;}
+  .win-row .ic{color:var(--green);font-size:14px;}
+  .win-row .date{margin-left:auto;font-size:10px;color:var(--txt-faint);}
+
+  .mock-note{margin:30px 22px 0;padding:12px 16px;border:1px dashed var(--line);border-radius:8px;font-size:11px;color:var(--txt-faint);}
+  .mock-note b{color:var(--cyan);}
+</style>
+</head>
+<body>
+
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo"><span class="b">CMD</span>Center</div>
+      <div class="subtitle">Daily<br/>Command Center</div>
+    </div>
+    <span class="pill live"><span class="dot"></span> Live</span>
+    <span class="pill muted"><span class="dot"></span> Synced</span>
+    <div class="meta"><b>Today:</b> 04 Jun 2026 · Hawaii<br/><b>Last sync:</b> 28s ago · Notion</div>
+    <span class="clock" id="clock">06:04:18</span>
+    <div class="spacer"></div>
+    <span class="badge-ver">v1.2.0<br/>Notion backend</span>
+    <button class="btn cyan">Brief</button>
+    <button class="btn">Export</button>
+    <button class="btn amber">Sync</button>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <div class="tab active"><span>◉</span> Today</div>
+    <div class="tab"><span>▤</span> Tasks</div>
+    <div class="tab"><span>◷</span> Routine</div>
+    <div class="tab"><span>◇</span> Wins</div>
+  </div>
+
+  <div class="wrap">
+
+    <!-- GAUGES + STATS -->
+    <section>
+      <div class="row r-gauges">
+        <div class="card tall">
+          <div class="gauge-wrap">
+            <svg viewBox="0 0 120 120" width="148" height="148">
+              <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+              <circle cx="60" cy="60" r="50" fill="none" stroke="#2bdd7e" stroke-width="9" stroke-linecap="round"
+                stroke-dasharray="314" stroke-dashoffset="38" transform="rotate(-90 60 60)"
+                style="filter:drop-shadow(0 0 6px rgba(43,221,126,.6));"/>
+            </svg>
+            <div class="gauge-val"><div class="gauge-num c-green">12</div><div class="gauge-den">days</div></div>
+          </div>
+          <div class="gauge-label">Streak</div>
+          <div class="gauge-sub">task + win logged daily</div>
+        </div>
+
+        <div class="card tall">
+          <div class="gauge-wrap">
+            <svg viewBox="0 0 120 120" width="148" height="148">
+              <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+              <circle cx="60" cy="60" r="50" fill="none" stroke="#2ee6e6" stroke-width="9" stroke-linecap="round"
+                stroke-dasharray="314" stroke-dashoffset="110" transform="rotate(-90 60 60)"
+                style="filter:drop-shadow(0 0 6px rgba(46,230,230,.6));"/>
+            </svg>
+            <div class="gauge-val"><div class="gauge-num c-cyan">65%</div><div class="gauge-den">today</div></div>
+          </div>
+          <div class="gauge-label">Today's Progress</div>
+          <div class="gauge-sub">5 of 8 tasks done</div>
+        </div>
+
+        <div class="card tall">
+          <div class="gauge-wrap">
+            <svg viewBox="0 0 120 120" width="148" height="148">
+              <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+              <circle cx="60" cy="60" r="50" fill="none" stroke="#ffb020" stroke-width="9" stroke-linecap="round"
+                stroke-dasharray="314" stroke-dashoffset="160" transform="rotate(-90 60 60)"
+                style="filter:drop-shadow(0 0 6px rgba(255,176,32,.6));"/>
+            </svg>
+            <div class="gauge-val"><div class="gauge-num c-amber">49%</div><div class="gauge-den">week</div></div>
+          </div>
+          <div class="gauge-label">Week Completion</div>
+          <div class="gauge-sub">17 of 35 this week</div>
+        </div>
+
+        <div class="card">
+          <div class="stat-label">Open Tasks</div>
+          <div class="stat-num c-cyan">14</div>
+          <div class="stat-sub">3 due today · 2 overdue</div>
+          <div class="stat-divider"></div>
+          <div class="stat-label">Priority Flagged</div>
+          <div class="stat-num sm c-red">4</div>
+          <div class="stat-sub">need attention</div>
+        </div>
+
+        <div class="card">
+          <div class="stat-label">Wins This Week</div>
+          <div class="stat-num c-green">9</div>
+          <div class="stat-sub">last logged 14h ago</div>
+          <div class="stat-divider"></div>
+          <div class="stat-label">Focus Minutes Today</div>
+          <div class="stat-num sm c-amber">94</div>
+          <div class="stat-sub">3 pomodoros</div>
+        </div>
+
+        <div class="card">
+          <div class="stat-label">Active Areas</div>
+          <div class="stat-num c-purple">5</div>
+          <div class="stat-sub">Focus · Health · Home · Finances · Routines</div>
+          <div class="stat-divider"></div>
+          <div class="stat-label">Brain Dump</div>
+          <div class="stat-num sm">3</div>
+          <div class="stat-sub">unsorted to triage</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- MOMENTUM HERO + BRIEF -->
+    <section>
+      <div class="card" style="padding:22px 26px;">
+        <div class="hero">
+          <div class="hero-ring">
+            <svg viewBox="0 0 120 120" width="92" height="92">
+              <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+              <circle cx="60" cy="60" r="50" fill="none" stroke="#2bdd7e" stroke-width="9" stroke-linecap="round"
+                stroke-dasharray="314" stroke-dashoffset="78" transform="rotate(-90 60 60)"
+                style="filter:drop-shadow(0 0 6px rgba(43,221,126,.6));"/>
+            </svg>
+            <div class="gauge-val"><div class="gauge-num c-green">75</div></div>
+          </div>
+          <div class="hero-text">
+            <h3>Momentum Score · 6am Brief</h3>
+            <div class="hero-status c-green">ON TRACK</div>
+            <div class="hero-note">Streak alive (need 1 task + 1 win today) · 4 priority items open · 94 focus min logged</div>
+          </div>
+          <div class="spacer"></div>
+          <button class="btn cyan">Open full brief</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- MAIN: PROMINENT TASK LIST + SUPPORT RAIL -->
+    <section>
+      <div class="main">
+
+        <!-- TASK LIST (the expanded panel) -->
+        <div class="card" style="padding:0;">
+          <div class="panel-head">
+            <span class="panel-title">Today's Tasks</span>
+            <div class="spacer"></div>
+            <span class="count-chip">5 of 8 done · 4 priority</span>
+          </div>
+
+          <div class="quickadd">
+            <input placeholder="+ Quick add a task — type, hit enter…" />
+            <button class="btn cyan">Add</button>
+          </div>
+
+          <div class="ti">
+            <div class="chk on"></div>
+            <div class="name" style="grid-column:2;">Review overnight 6am brief</div>
+            <div class="right">done<br/>06:01</div>
+            <div class="tags"><span class="tag purple">Focus &amp; Work</span></div>
+          </div>
+
+          <div class="ti">
+            <div class="chk"></div>
+            <div class="name" style="grid-column:2;"><span class="star">★</span> Finish Command Center rebuild spec</div>
+            <div class="right">due<br/><span class="c-red">today</span></div>
+            <div class="tags"><span class="tag purple">Focus &amp; Work</span><span class="tag amber">High energy</span><span class="tag cyan">~45m</span></div>
+          </div>
+
+          <div class="ti">
+            <div class="chk"></div>
+            <div class="name" style="grid-column:2;">Reply to accountant re: Q2 estimates</div>
+            <div class="right">due<br/><span class="c-amber">today</span></div>
+            <div class="tags"><span class="tag yellow" style="color:#e6c84a;border-color:rgba(230,200,74,.3);background:rgba(230,200,74,.1);">Finances</span><span class="tag green">Low energy</span><span class="tag cyan">~10m</span></div>
+          </div>
+
+          <div class="ti">
+            <div class="chk"></div>
+            <div class="name" style="grid-column:2;"><span class="star">★</span> Confirm streak reset logic</div>
+            <div class="right">overdue<br/><span class="c-red">1 day</span></div>
+            <div class="tags"><span class="tag purple">Focus &amp; Work</span><span class="tag amber">Med energy</span><span class="tag cyan">~20m</span></div>
+          </div>
+
+          <div class="ti">
+            <div class="chk"></div>
+            <div class="name" style="grid-column:2;">Morning workout + protein</div>
+            <div class="right">recurring</div>
+            <div class="tags"><span class="tag green">Daily Routines</span><span class="tag amber">High energy</span><span class="tag cyan">~30m</span></div>
+          </div>
+
+          <div class="ti">
+            <div class="chk"></div>
+            <div class="name" style="grid-column:2;">Quick win: clear inbox to zero</div>
+            <div class="right">anytime</div>
+            <div class="tags"><span class="tag blue">Home &amp; Space</span><span class="tag green">Low energy</span><span class="tag cyan">~5m</span></div>
+          </div>
+        </div>
+
+        <!-- SUPPORT RAIL -->
+        <div>
+          <!-- FOCUS / POMODORO TIMER -->
+          <div class="card" style="padding:0;">
+            <div class="timer">
+              <div class="ring">
+                <svg viewBox="0 0 120 120" width="84" height="84">
+                  <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+                  <circle cx="60" cy="60" r="50" fill="none" stroke="#2ee6e6" stroke-width="9" stroke-linecap="round"
+                    stroke-dasharray="314" stroke-dashoffset="86" transform="rotate(-90 60 60)"
+                    style="filter:drop-shadow(0 0 6px rgba(46,230,230,.6));"/>
+                </svg>
+                <div class="v">18:42</div>
+              </div>
+              <div class="t-info">
+                <div class="lab">Focus session</div>
+                <div class="st">Pomodoro 3 of 4 · running</div>
+                <div class="sub">on: rebuild spec · break at :25</div>
+              </div>
+            </div>
+            <div class="timer-actions">
+              <button class="btn cyan">Pause</button>
+              <button class="btn">Reset</button>
+              <button class="btn amber">+5 min</button>
+            </div>
+          </div>
+
+          <!-- QUICK CAPTURE / BRAIN DUMP -->
+          <div class="card col-gap">
+            <div class="section-label">Quick capture · brain dump</div>
+            <div class="capture">
+              <input placeholder="Dump a thought — hit enter to stash…" />
+              <button class="btn cyan">Add</button>
+            </div>
+            <div class="brain-item"><span class="d">›</span> call dentist <span class="spacer"></span><span class="tag">unsorted</span></div>
+            <div class="brain-item"><span class="d">›</span> idea: weekly review automation <span class="spacer"></span><span class="tag">unsorted</span></div>
+            <div class="brain-item"><span class="d">›</span> renew domain <span class="spacer"></span><span class="tag">unsorted</span></div>
+          </div>
+
+          <!-- RECENT WINS -->
+          <div class="card col-gap">
+            <div class="section-label">Recent wins · keep the dopamine</div>
+            <div class="win-row"><span class="ic">◇</span> Rebuilt task list read logic <span class="date">14h</span></div>
+            <div class="win-row"><span class="ic">◇</span> Hit 12-day streak <span class="date">1d</span></div>
+            <div class="win-row"><span class="ic">◇</span> Closed May books <span class="date">2d</span></div>
+            <div class="win-row"><span class="ic">◇</span> Shipped v1.1.2 <span class="date">3d</span></div>
+          </div>
+
+          <!-- ROUTINE RESET -->
+          <div class="card col-gap">
+            <div class="section-label">Routine reset</div>
+            <div class="hero" style="margin-top:2px;gap:16px;">
+              <div>
+                <div class="stat-num sm c-cyan" style="margin-top:0;">00:00</div>
+                <div class="stat-sub">next reset · Hawaii (12am)</div>
+              </div>
+              <div class="spacer"></div>
+              <div style="text-align:right;">
+                <div class="stat-label">Last completed</div>
+                <div class="stat-sub" style="margin-top:6px;">03 Jun · 21:40</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+  </div>
+
+  <div class="mock-note">
+    <b>MOCKUP — v1.2.0 sign-off preview.</b> Dashboard direction with the task list promoted to the main panel (quick-add, inline complete, priority star, Area + energy + time-estimate tags, due/overdue). Support rail: focus/pomodoro timer, quick-capture brain dump, recent wins, routine reset (12am HST). Data is illustrative; the live build wires streak, tasks, routines, wins, focus sessions, and capture to your Notion backend.
+  </div>
+
+<script>
+  function tick(){const d=new Date();document.getElementById('clock').textContent=
+    [d.getHours(),d.getMinutes(),d.getSeconds()].map(x=>String(x).padStart(2,'0')).join(':');}
+  setInterval(tick,1000);tick();
+  document.querySelectorAll('.chk').forEach(c=>c.addEventListener('click',()=>{
+    c.classList.toggle('on');c.closest('.ti').classList.toggle('is-done');
+  }));
+</script>
+</body>
+</html>
