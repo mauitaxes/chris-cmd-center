@@ -835,14 +835,17 @@
       var o=toObj(res),id=o&&o.pages&&o.pages[0]&&o.pages[0].id;
       app.routines.push({id:id||("tmp-"+Date.now()),name:r.name,why:r.why||"",mins:+r.mins||0,when:r.when||"Morning",order:+r.order||99,done:false,active:true});
       app.routines.sort(function(a,b){return a.order-b.order;});
-      renderRoutineEditor();renderSteps();renderTopStats();toast("Routine added");
+      if(id){var rids=(app.state&&app.state.routineIds||[]).concat([id]);await saveState({routineIds:rids});}
+      renderRoutineEditor();renderSteps();renderTopStats();toast(id?"Routine added":"Added (local only — reconnect to persist)");
     }catch(e){toast("Add failed");}
   }
   async function removeRoutine(id){
     if(app.mode!=="live")return toast("Connect to edit routines");
     app.routines=app.routines.filter(function(x){return x.id!==id;});
     renderRoutineEditor();renderSteps();renderTopStats();toast("Routine removed");
-    try{await call(T.update,{page_id:id,command:"update_properties",properties:{Active:"__NO__"}});}catch(e){}
+    try{await call(T.update,{page_id:id,command:"update_properties",properties:{Active:"__NO__"}});
+      var rids=(app.state&&app.state.routineIds||[]).filter(function(x){return x!==id;});await saveState({routineIds:rids});
+    }catch(e){}
   }
   async function moveRoutine(id,dir){
     if(app.mode!=="live")return toast("Connect to edit routines");
