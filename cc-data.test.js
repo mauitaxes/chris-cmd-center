@@ -299,3 +299,10 @@ test("clearedRoutines: does not mutate the input", () => {
 test("clearedRoutines: handles empty/undefined", () => {
   assert.deepEqual(C.clearedRoutines(), []);
 });
+test("purgeRoutineOps: removes routine ops, keeps the rest", () => {
+  const ops=[{t:"routine",id:"a",done:true},{t:"task",id:"x",done:true},{t:"win",title:"w",date:"2026-06-05"}];
+  assert.deepEqual(C.purgeRoutineOps(ops), [{t:"task",id:"x",done:true},{t:"win",title:"w",date:"2026-06-05"}]);
+});
+test("purgeRoutineOps: empty/undefined → []", () => {
+  assert.deepEqual(C.purgeRoutineOps(), []);
+});

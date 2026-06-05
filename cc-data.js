@@ -139,6 +139,11 @@
     });
   }
 
+  // v1.5.0: drop routine ops from a pending-overlay op array (pure)
+  function purgeRoutineOps(ops){
+    return (ops||[]).filter(function(op){ return op && op.t!=="routine"; });
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -156,7 +161,8 @@
     reorderSwap: reorderSwap,
     groupTasksByArea: groupTasksByArea,
     needsDailyReset: needsDailyReset,
-    clearedRoutines: clearedRoutines
+    clearedRoutines: clearedRoutines,
+    purgeRoutineOps: purgeRoutineOps
   };
 });
 /*__CC_DATA_END__*/
