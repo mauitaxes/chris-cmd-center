@@ -323,3 +323,15 @@ test("dailyReportText: handles empty inputs without throwing", () => {
   assert.ok(txt.includes("2026-06-04"));
   assert.ok(txt.includes("0 of 0"));
 });
+
+// ── Group 8: v1.5.0 Brain Dump triage ──
+test("registerId: appends a new id", () => {
+  assert.deepEqual(C.registerId(["a","b"], "c"), ["a","b","c"]);
+});
+test("registerId: no duplicate when already present", () => {
+  assert.deepEqual(C.registerId(["a","b"], "b"), ["a","b"]);
+});
+test("registerId: empty/undefined base, ignores falsy id", () => {
+  assert.deepEqual(C.registerId(undefined, "a"), ["a"]);
+  assert.deepEqual(C.registerId(["a"], ""), ["a"]);
+});

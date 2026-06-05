@@ -144,6 +144,13 @@
     return (ops||[]).filter(function(op){ return op && op.t!=="routine"; });
   }
 
+  // v1.5.0: append id to a list if truthy and not already present (pure)
+  function registerId(ids, id){
+    var list=(ids||[]).slice();
+    if(id && list.indexOf(id)===-1) list.push(id);
+    return list;
+  }
+
   // v1.5.0: plain-text end-of-day report from the ending state (pure)
   function dailyReportText(dateStr, tasks, routines, wins){
     tasks=tasks||[]; routines=routines||[]; wins=wins||[];
@@ -175,6 +182,7 @@
     newRoutineProps: newRoutineProps,
     reorderSwap: reorderSwap,
     groupTasksByArea: groupTasksByArea,
+    registerId: registerId,
     needsDailyReset: needsDailyReset,
     clearedRoutines: clearedRoutines,
     purgeRoutineOps: purgeRoutineOps,
