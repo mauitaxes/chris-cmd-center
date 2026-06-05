@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Command Center</title>
+<style>
+__CC_STYLES__
+</style>
+</head>
+<body>
+  <h2 class="sr-only">Command Center daily dashboard: streak, morning routine, today's tasks, focus timer, and wins.</h2>
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo"><span class="b">CMD</span>Center</div>
+      <div class="subtitle">Daily<br/>Command Center</div>
+    </div>
+    <span class="pill snap" id="pill-live"><span class="dot"></span> <span id="live-label">Snapshot</span></span>
+    <div class="meta"><b>Today:</b> <span id="today-date">—</span> · Hawaii<br/><b>Status:</b> <span id="sync-status">loading…</span></div>
+    <span class="clock" id="clock">--:--:--</span>
+    <div class="spacer"></div>
+    <span class="badge-ver" id="badge-ver">v1.4.2<br/>Notion backend</span>
+    <button class="btn cyan" id="btn-brief">Brief</button>
+    <button class="btn amber" id="btn-sync">Sync</button>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="today"><span>◉</span> Today</div>
+    <div class="tab" data-tab="tasks"><span>▤</span> Tasks</div>
+    <div class="tab" data-tab="routine"><span>◷</span> Routine</div>
+    <div class="tab" data-tab="wins"><span>◇</span> Wins</div>
+  </div>
+
+  <div class="wrap">
+    <div id="tab-today">
+      <section>
+        <div class="row r-gauges">
+          <div class="card tall">
+            <div class="gauge-wrap">
+              <svg viewBox="0 0 120 120" width="148" height="148">
+                <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+                <circle id="g-streak" cx="60" cy="60" r="50" fill="none" stroke="#2bdd7e" stroke-width="9" stroke-linecap="round" stroke-dasharray="314" stroke-dashoffset="314" transform="rotate(-90 60 60)" style="filter:drop-shadow(0 0 6px rgba(43,221,126,.6));transition:stroke-dashoffset .6s;"/>
+              </svg>
+              <div class="gauge-val"><div class="gauge-num c-green" id="v-streak">0</div><div class="gauge-den">days</div></div>
+            </div>
+            <div class="gauge-label">Streak</div>
+            <div class="gauge-sub">task + win logged daily</div>
+          </div>
+          <div class="card tall">
+            <div class="gauge-wrap">
+              <svg viewBox="0 0 120 120" width="148" height="148">
+                <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+                <circle id="g-today" cx="60" cy="60" r="50" fill="none" stroke="#2ee6e6" stroke-width="9" stroke-linecap="round" stroke-dasharray="314" stroke-dashoffset="314" transform="rotate(-90 60 60)" style="filter:drop-shadow(0 0 6px rgba(46,230,230,.6));transition:stroke-dashoffset .6s;"/>
+              </svg>
+              <div class="gauge-val"><div class="gauge-num c-cyan" id="v-today">0%</div><div class="gauge-den">today</div></div>
+            </div>
+            <div class="gauge-label">Today's Progress</div>
+            <div class="gauge-sub" id="s-today">0 of 0 tasks done</div>
+          </div>
+          <div class="card tall">
+            <div class="gauge-wrap">
+              <svg viewBox="0 0 120 120" width="148" height="148">
+                <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+                <circle id="g-routine" cx="60" cy="60" r="50" fill="none" stroke="#ffb020" stroke-width="9" stroke-linecap="round" stroke-dasharray="314" stroke-dashoffset="314" transform="rotate(-90 60 60)" style="filter:drop-shadow(0 0 6px rgba(255,176,32,.6));transition:stroke-dashoffset .6s;"/>
+              </svg>
+              <div class="gauge-val"><div class="gauge-num c-amber" id="v-routine">0%</div><div class="gauge-den">routine</div></div>
+            </div>
+            <div class="gauge-label">Morning Routine</div>
+            <div class="gauge-sub" id="s-routine">0 of 0 steps</div>
+          </div>
+          <div class="card">
+            <div class="stat-label">Open Tasks</div>
+            <div class="stat-num c-cyan" id="v-open">0</div>
+            <div class="stat-sub" id="s-open">0 due today · 0 overdue</div>
+            <div class="stat-divider"></div>
+            <div class="stat-label">Priority Flagged</div>
+            <div class="stat-num sm c-red" id="v-prio">0</div>
+            <div class="stat-sub">need attention</div>
+          </div>
+          <div class="card">
+            <div class="stat-label">Wins This Week</div>
+            <div class="stat-num c-green" id="v-wins">0</div>
+            <div class="stat-sub" id="s-wins">—</div>
+            <div class="stat-divider"></div>
+            <div class="stat-label">Focus Minutes Today</div>
+            <div class="stat-num sm c-amber" id="v-focus">0</div>
+            <div class="stat-sub" id="s-focus">0 pomodoros</div>
+          </div>
+          <div class="card">
+            <div class="stat-label">Active Areas</div>
+            <div class="stat-num c-purple" id="v-areas">0</div>
+            <div class="stat-sub" id="s-areas">—</div>
+            <div class="stat-divider"></div>
+            <div class="stat-label">Brain Dump</div>
+            <div class="stat-num sm" id="v-cap">0</div>
+            <div class="stat-sub">unsorted to triage</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="card" style="padding:22px 26px;">
+          <div class="hero">
+            <div class="hero-ring">
+              <svg viewBox="0 0 120 120" width="92" height="92">
+                <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+                <circle id="g-mom" cx="60" cy="60" r="50" fill="none" stroke="#2bdd7e" stroke-width="9" stroke-linecap="round" stroke-dasharray="314" stroke-dashoffset="314" transform="rotate(-90 60 60)" style="filter:drop-shadow(0 0 6px rgba(43,221,126,.6));transition:stroke-dashoffset .6s;"/>
+              </svg>
+              <div class="gauge-val"><div class="gauge-num c-green" id="v-mom">0</div></div>
+            </div>
+            <div class="hero-text">
+              <h3>Momentum Score · 6am Brief</h3>
+              <div class="hero-status c-green" id="mom-status">—</div>
+              <div class="hero-note" id="mom-note">Loading your day…</div>
+            </div>
+            <div class="spacer"></div>
+            <button class="btn cyan" id="btn-fullbrief">Open full brief</button>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="main">
+          <div>
+            <div class="card" style="padding:0;">
+              <div class="panel-head"><span class="panel-title">Morning Routine · wake up &amp; beat the fog</span><div class="spacer"></div><span class="count-chip" id="step-count">—</span></div>
+              <div id="step-list"><div class="empty">Loading…</div></div>
+            </div>
+            <div class="card col-gap" style="padding:0;">
+              <div class="panel-head">
+                <span class="panel-title">Today's Tasks</span>
+                <div class="spacer"></div>
+                <span class="count-chip" id="task-count">—</span>
+              </div>
+              <div class="quickadd">
+                <input class="ipt" id="qa-task" placeholder="+ Quick add a task — type, hit enter…" />
+                <select class="ipt" id="qa-task-area" style="flex:0 0 auto;max-width:160px;cursor:pointer;"></select>
+                <button class="btn cyan" id="qa-task-btn">Add</button>
+              </div>
+              <div id="task-list"><div class="empty">Loading tasks…</div></div>
+            </div>
+          </div>
+
+          <div>
+            <div class="card" style="padding:0;">
+              <div class="timer">
+                <div class="ring">
+                  <svg viewBox="0 0 120 120" width="84" height="84">
+                    <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="9"/>
+                    <circle id="g-timer" cx="60" cy="60" r="50" fill="none" stroke="#2ee6e6" stroke-width="9" stroke-linecap="round" stroke-dasharray="314" stroke-dashoffset="0" transform="rotate(-90 60 60)" style="filter:drop-shadow(0 0 6px rgba(46,230,230,.6));"/>
+                  </svg>
+                  <div class="v" id="timer-display">25:00</div>
+                </div>
+                <div class="t-info">
+                  <div class="lab">Focus session</div>
+                  <div class="st" id="timer-state">Ready · 25-min pomodoro</div>
+                  <div class="sub" id="timer-sub">press Start to begin</div>
+                </div>
+              </div>
+              <div class="timer-actions">
+                <button class="btn cyan" id="t-start">Start</button>
+                <button class="btn" id="t-reset">Reset</button>
+                <button class="btn amber" id="t-5">+5 min</button>
+              </div>
+            </div>
+            <div class="card col-gap">
+              <div class="section-label">Quick capture · brain dump</div>
+              <div class="cap-row">
+                <input class="ipt" id="qa-cap" placeholder="Dump a thought — hit enter to stash…" />
+                <button class="btn cyan" id="qa-cap-btn">Add</button>
+              </div>
+              <div id="cap-list"><div class="empty" style="padding:6px 0;">Nothing captured yet.</div></div>
+            </div>
+            <div class="card col-gap">
+              <div class="section-label">Log a win · keep the dopamine</div>
+              <div class="cap-row">
+                <input class="ipt" id="qa-win" placeholder="What went well? — hit enter to log…" />
+                <button class="btn cyan" id="qa-win-btn">Log</button>
+              </div>
+              <div id="win-list"><div class="empty" style="padding:6px 0;">No wins logged yet.</div></div>
+            </div>
+            <div class="card col-gap">
+              <div class="section-label">Routine reset</div>
+              <div class="hero" style="margin-top:2px;gap:16px;">
+                <div>
+                  <div class="stat-num sm c-cyan" style="margin-top:0;" id="reset-countdown">--:--</div>
+                  <div class="stat-sub">next reset · Hawaii (12am)</div>
+                </div>
+                <div class="spacer"></div>
+                <div style="text-align:right;">
+                  <div class="stat-label">Last completed</div>
+                  <div class="stat-sub" style="margin-top:6px;" id="last-completed">—</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="tab-tasks" class="hidden">
+      <section>
+        <div id="task-sections" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;align-items:start;"><div class="empty">Loading…</div></div>
+      </section>
+    </div>
+
+    <div id="tab-routine" class="hidden">
+      <section>
+        <div class="card" style="padding:0;">
+          <div class="panel-head"><span class="panel-title">Routines</span><div class="spacer"></div><span class="count-chip" id="routine-count">—</span></div>
+          <div id="routine-editor"><div class="empty">Loading routines…</div></div>
+        </div>
+      </section>
+    </div>
+
+    <div id="tab-wins" class="hidden">
+      <section>
+        <div class="card">
+          <div class="section-label">Recent wins</div>
+          <div id="win-list2"><div class="empty" style="padding:6px 0;">No wins yet.</div></div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  "use strict";
+/*__CC_DATA_START__*//*__CC_DATA_END__*/
+__CC_APP__
+</script>
+</body>
+</html>
