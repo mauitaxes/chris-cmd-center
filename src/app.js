@@ -73,6 +73,18 @@
   function cacheSave(){try{localStorage.setItem(CACHEKEY,JSON.stringify({v:"1.3.0",ts:Date.now(),state:app.state,tasks:app.tasks,routines:app.routines,wins:app.wins,caps:app.caps}));}catch(e){}}
   function cacheLoad(){try{var o=JSON.parse(localStorage.getItem(CACHEKEY)||"null");return (o&&o.tasks&&o.state)?o:null;}catch(e){return null;}}
 
+  // ---- v1.5.0 daily report: localStorage guard + Capture-DB append ----
+  function reportKey(d){return "cc_report_"+d;}
+  function hasReport(d){try{return !!localStorage.getItem(reportKey(d));}catch(e){return false;}}
+  function saveReport(d,txt){try{localStorage.setItem(reportKey(d),txt);}catch(e){}}
+  // background-only: persist the report to the Capture DB, hidden from triage (Processed=YES)
+  function pushReportToNotion(d,txt){
+    if(app.mode!=="live")return;
+    call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{
+      Item:"[Daily Report "+d+"]", Notes:txt, Processed:"__YES__", "date:Captured:start":d
+    }}]}).catch(function(){});
+  }
+
   // parsing helpers (unwrap/deepText/toText/parseProps) provided by CCData via aliases above; toObj kept inline
   function toObj(r){
     if(r&&typeof r==="object"&&!Array.isArray(r)&&(r.results||r.pages||r.properties))return r;
@@ -454,6 +466,36 @@
     $("badge-ver").addEventListener("click",showDiag);
   }
 
+  // v1.5.0: fire on load when the stored reset date != today. Instant local clear,
+  // background Notion writes. Returns true if a reset ran (used for first-run routing in Phase 3).
+  function runDailyReset(){
+    var today=todayHST();
+    var last=app.state&&app.state.lastResetDate;
+    if(!CCData.needsDailyReset(last,today)) return false;
+    var prior=last||hstDate(new Date(Date.now()-864e5));
+    // 1. safety-net report for the prior day (once per day): local guard + Capture-DB append
+    if(!hasReport(prior)){
+      var rpt=CCData.dailyReportText(prior, app.tasks, app.routines, app.wins);
+      saveReport(prior, rpt);
+      pushReportToNotion(prior, rpt);
+    }
+    // 2. capture which routines were checked, for the background Notion clear
+    var toClear=app.routines.filter(function(r){return r.done;}).map(function(r){return r.id;});
+    // 3. clear local state immediately (in-memory = instant)
+    app.routines=CCData.clearedRoutines(app.routines);
+    var o=lsGet(); o.pending=CCData.purgeRoutineOps(o.pending); lsSet(o);
+    // 4. set the new reset date
+    app.state.lastResetDate=today;
+    // 5. background: persist new reset date + clear Done Today in Notion (do NOT await)
+    if(app.mode==="live"){
+      saveState({lastResetDate:today});
+      toClear.forEach(function(id){
+        call(T.update,{page_id:id,command:"update_properties",properties:{"Done Today":"__NO__"}}).catch(function(){});
+      });
+    }
+    return true;
+  }
+
   async function boot(isResync){
     $("today-date").textContent=prettyDate(hstDate())+" "+new Date().getFullYear();
     loadSnapshot();
@@ -465,7 +507,7 @@
     // Live path works two ways: Cowork bridge (ok===true) OR the Netlify notion-proxy (no bridge).
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
-    try{await flushPending();await liveLoad();renderAll();cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins");if(isResync)toast("Synced");}
+    try{await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins");if(isResync)toast("Synced");}
     catch(e){app.mode="snapshot";setSync("snap","offline snapshot · changes saved locally");renderAll();}
   }
 
