@@ -974,8 +974,12 @@
   }
 
   function initAreaPicker(){var sel=$("qa-task-area");if(!sel)return;var last="Focus & Work";try{last=localStorage.getItem("cc_lastArea")||last;}catch(e){}sel.innerHTML=AREAS.map(function(a){return '<option'+(a===last?' selected':'')+'>'+esc(a)+'</option>';}).join("");}
+  function showTab(name){
+    document.querySelectorAll(".tab").forEach(function(x){x.classList.toggle("active",x.getAttribute("data-tab")===name);});
+    ["today","tasks","routine","wins","focus"].forEach(function(n){var el=$("tab-"+n);if(el)el.classList.toggle("hidden",n!==name);});
+  }
   function wire(){
-    document.querySelectorAll(".tab").forEach(function(tb){tb.addEventListener("click",function(){document.querySelectorAll(".tab").forEach(function(x){x.classList.remove("active");});tb.classList.add("active");["today","tasks","routine","wins"].forEach(function(n){$("tab-"+n).classList.add("hidden");});$("tab-"+tb.getAttribute("data-tab")).classList.remove("hidden");});});
+    document.querySelectorAll(".tab").forEach(function(tb){tb.addEventListener("click",function(){showTab(tb.getAttribute("data-tab"));});});
     document.body.addEventListener("click",function(e){var el=e.target.closest("[data-act]");if(!el)return;var act=el.getAttribute("data-act"),id=el.getAttribute("data-id");if(act==="task"){var t=app.tasks.filter(function(x){return x.id===id;})[0];if(t)toggleTask(t);}if(act==="routine"){var r=app.routines.filter(function(x){return x.id===id;})[0];if(r)toggleRoutine(r);}if(act==="prio"){var tp=app.tasks.filter(function(x){return x.id===id;})[0];if(tp)togglePriority(tp);}});
     function bindAdd(inp,btn,fn){var i=$(inp);var b=$(btn);if(b)b.addEventListener("click",function(){fn(i.value);i.value="";});if(i)i.addEventListener("keydown",function(e){if(e.key==="Enter"){fn(i.value);i.value="";}});}
     initAreaPicker();
@@ -1042,8 +1046,7 @@
     catch(e){app.mode="snapshot";setSync("snap","offline snapshot · changes saved locally");renderAll();}
   }
 
-  wire();resetTimer();tick();setInterval(tick,1000);boot(false);
-})();
+  wire();resetTi
 </script>
 </body>
 </html>
