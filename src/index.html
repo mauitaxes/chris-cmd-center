@@ -30,6 +30,7 @@ __CC_STYLES__
     <div class="tab" data-tab="tasks"><span>▤</span> Tasks</div>
     <div class="tab" data-tab="routine"><span>◷</span> Routine</div>
     <div class="tab" data-tab="wins"><span>◇</span> Wins</div>
+    <div class="tab" data-tab="focus"><span>◐</span> Focus</div>
   </div>
 
   <div class="wrap">
@@ -219,6 +220,31 @@ __CC_STYLES__
         <div class="card">
           <div class="section-label">Recent wins</div>
           <div id="win-list2"><div class="empty" style="padding:6px 0;">No wins yet.</div></div>
+        </div>
+      </section>
+    </div>
+
+    <div id="tab-focus" class="hidden">
+      <section>
+        <div class="card focus-room">
+          <div class="focus-ring">
+            <svg viewBox="0 0 120 120" width="240" height="240">
+              <circle cx="60" cy="60" r="50" fill="none" stroke="#16202b" stroke-width="7"/>
+              <circle id="g-timer-focus" cx="60" cy="60" r="50" fill="none" stroke="#2ee6e6" stroke-width="7" stroke-linecap="round" stroke-dasharray="314" stroke-dashoffset="0" transform="rotate(-90 60 60)" style="filter:drop-shadow(0 0 8px rgba(46,230,230,.6));"/>
+            </svg>
+            <div class="focus-num" id="timer-display-focus">25:00</div>
+          </div>
+          <input class="ipt focus-intent" id="focus-intent" placeholder="What am I focusing on?" />
+          <div class="focus-state" id="timer-state-focus">Ready · 25-min pomodoro</div>
+          <div class="timer-actions">
+            <button class="btn cyan" id="t-start-focus">Start</button>
+            <button class="btn" id="t-reset-focus">Reset</button>
+            <button class="btn amber" id="t-5-focus">+5 min</button>
+          </div>
+          <div class="focus-park">
+            <input class="ipt" id="focus-park-input" placeholder="Park a stray thought — it goes to Brain Dump…" />
+            <button class="btn" id="focus-park-btn">Park this thought</button>
+          </div>
         </div>
       </section>
     </div>

@@ -176,10 +176,11 @@
 
   var timer={total:25*60,left:25*60,running:false,iv:null};
   function fmt(s){var m=Math.floor(s/60),x=s%60;return String(m).padStart(2,"0")+":"+String(x).padStart(2,"0");}
-  function paintTimer(){$("timer-display").textContent=fmt(timer.left);ring("g-timer",1-timer.left/timer.total);}
-  function startTimer(){if(timer.running){clearInterval(timer.iv);timer.running=false;$("t-start").textContent="Start";$("timer-state").textContent="Paused";return;}timer.running=true;$("t-start").textContent="Pause";$("timer-state").textContent="Running · stay on one thing";$("timer-sub").textContent="break at 0:00";timer.iv=setInterval(function(){timer.left--;paintTimer();if(timer.left<=0){clearInterval(timer.iv);timer.running=false;$("t-start").textContent="Start";$("timer-state").textContent="Done · nice work";$("timer-sub").textContent="logged to Focus Sessions";var mins=Math.round(timer.total/60);logFocus(mins);toast("Focus done · "+mins+"m");timer.left=timer.total;setTimeout(paintTimer,1500);}},1000);}
-  function resetTimer(){clearInterval(timer.iv);timer.running=false;timer.left=timer.total;$("t-start").textContent="Start";$("timer-state").textContent="Ready · "+(timer.total/60)+"-min pomodoro";$("timer-sub").textContent="press Start to begin";paintTimer();}
-  function add5(){timer.total+=5*60;timer.left+=5*60;paintTimer();$("timer-state").textContent="Ready · "+(timer.total/60)+"-min pomodoro";}
+  function paintTimer(){var s=fmt(timer.left),off=1-timer.left/timer.total;if($("timer-display"))$("timer-display").textContent=s;if($("timer-display-focus"))$("timer-display-focus").textContent=s;ring("g-timer",off);ring("g-timer-focus",off);}
+  function setTimerState(txt){if($("timer-state"))$("timer-state").textContent=txt;if($("timer-state-focus"))$("timer-state-focus").textContent=txt;}
+  function startTimer(){if(timer.running){clearInterval(timer.iv);timer.running=false;$("t-start").textContent="Start";setTimerState("Paused");return;}timer.running=true;$("t-start").textContent="Pause";setTimerState("Running · stay on one thing");$("timer-sub").textContent="break at 0:00";timer.iv=setInterval(function(){timer.left--;paintTimer();if(timer.left<=0){clearInterval(timer.iv);timer.running=false;$("t-start").textContent="Start";setTimerState("Done · nice work");$("timer-sub").textContent="logged to Focus Sessions";var mins=Math.round(timer.total/60);logFocus(mins);toast("Focus done · "+mins+"m");timer.left=timer.total;setTimeout(paintTimer,1500);}},1000);}
+  function resetTimer(){clearInterval(timer.iv);timer.running=false;timer.left=timer.total;$("t-start").textContent="Start";setTimerState("Ready · "+(timer.total/60)+"-min pomodoro");$("timer-sub").textContent="press Start to begin";paintTimer();}
+  function add5(){timer.total+=5*60;timer.left+=5*60;paintTimer();setTimerState("Ready · "+(timer.total/60)+"-min pomodoro");}
 
   function openBrief(){
     var today=hstDate();var open=app.tasks.filter(function(t){return !t.done;});var prio=open.filter(function(t){return t.priority;});
@@ -224,6 +225,13 @@
       });
     })();
     $("t-start").addEventListener("click",startTimer);$("t-reset").addEventListener("click",resetTimer);$("t-5").addEventListener("click",add5);
+    if($("t-start-focus"))$("t-start-focus").addEventListener("click",startTimer);
+    if($("t-reset-focus"))$("t-reset-focus").addEventListener("click",resetTimer);
+    if($("t-5-focus"))$("t-5-focus").addEventListener("click",add5);
+    // dashboard timer ring/display is the doorway into the Focus room
+    (function(){var ringEl=document.querySelector("#tab-today .timer .ring");if(ringEl){ringEl.style.cursor="pointer";ringEl.title="Open Focus";ringEl.addEventListener("click",function(){showTab("focus");});}})();
+    // park a stray thought straight into Brain Dump without leaving focus
+    (function(){var i=$("focus-park-input"),b=$("focus-park-btn");function go(){if(!i)return;var v=i.value;i.value="";if(v.trim()){addCapture(v);toast("Parked to Brain Dump");}}if(b)b.addEventListener("click",go);if(i)i.addEventListener("keydown",function(e){if(e.key==="Enter")go();});})();
     $("btn-brief").addEventListener("click",openBrief);$("btn-fullbrief").addEventListener("click",openBrief);
     $("btn-sync").addEventListener("click",function(){boot(true);});
     $("badge-ver").addEventListener("click",showDiag);
