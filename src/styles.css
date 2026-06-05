@@ -115,3 +115,5 @@
   .step .mins{font-size:10px;color:var(--txt-dim);white-space:nowrap;}
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--panel-2);border:1px solid var(--cyan-dim);color:var(--cyan);font-size:12px;padding:10px 16px;border-radius:8px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:50;}
   .toast.show{opacity:1;}
+  .brain-item .cap-area,.brain-item .cap-promote,.brain-item .cap-del{margin-left:6px;}
+  .brain-item{flex-wrap:wrap;gap:4px;}

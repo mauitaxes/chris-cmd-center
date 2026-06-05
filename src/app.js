@@ -247,7 +247,26 @@
   }
   async function addCapture(item){item=(item||"").trim();if(!item)return;app.caps.unshift({id:null,item:item});renderCaps();renderTopStats();toast("Captured");
     lsPush({t:"cap",item:item});
-    if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:item,Processed:"__NO__","date:Captured:start":todayHST()}}]});lsRemove({t:"cap",item:item});}catch(e){}}
+    if(app.mode==="live"){try{var rc=await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:item,Processed:"__NO__","date:Captured:start":todayHST()}}]});var oc=toObj(rc);var cid=oc&&oc.pages&&oc.pages[0]&&oc.pages[0].id;if(cid&&app.caps[0])app.caps[0].id=cid;lsRemove({t:"cap",item:item});}catch(e){}}
+  }
+  async function promoteCapture(idx, area){
+    var c=app.caps[idx];if(!c)return;area=area||"Focus & Work";
+    var capId=c.id;var item=c.item;var tmp="tmp-"+Date.now();
+    app.tasks.unshift({id:tmp,title:item,area:area,done:false,priority:false,due:"",energy:"",time:""});
+    app.caps.splice(idx,1);
+    renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();renderCaps();renderTopStats();toast("Promoted to "+area);
+    lsPush({t:"taskAdd",title:item,tmpid:tmp,area:area});
+    if(app.mode==="live"){try{
+      var r=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:item,Area:area,Done:"__NO__","date:Created:start":todayHST()}}]});
+      var o=toObj(r);var id=o&&o.pages&&o.pages[0]&&o.pages[0].id;
+      if(id){var nt=app.tasks.filter(function(x){return x.id===tmp;})[0];if(nt)nt.id=id;lsRemove({t:"taskAdd",title:item,tmpid:tmp});await saveState({taskIds:CCData.registerId(app.state.taskIds,id)});}
+      if(capId){await call(T.update,{page_id:capId,command:"update_properties",properties:{Processed:"__YES__"}});}
+    }catch(e){toast("Promote save failed");}}
+  }
+  async function deleteCapture(idx){
+    var c=app.caps[idx];if(!c)return;var capId=c.id;
+    app.caps.splice(idx,1);renderCaps();renderTopStats();toast("Deleted");
+    if(app.mode==="live"&&capId){try{await call(T.update,{page_id:capId,command:"update_properties",properties:{Processed:"__YES__"}});}catch(e){}}
   }
   async function addWin(title){title=(title||"").trim();if(!title)return;var d=todayHST();app.wins.unshift({title:title,date:d});renderWins();renderTopStats();toast("Win logged");
     lsPush({t:"win",title:title,date:d});
@@ -384,7 +403,20 @@
     renderRoutineEditor();renderSteps();
     try{for(var i=0;i<writes.length;i++){await call(T.update,{page_id:writes[i].id,command:"update_properties",properties:{Order:writes[i].order}});}}catch(e){}
   }
-  function renderCaps(){var l=$("cap-list");if(!l)return;if(!app.caps.length){l.innerHTML='<div class="empty" style="padding:6px 0;">Nothing captured yet.</div>';}else{l.innerHTML=app.caps.slice(0,8).map(function(c){return '<div class="brain-item"><span class="d">›</span> '+esc(c.item)+' <span class="spacer"></span><span class="tag">unsorted</span></div>';}).join("");}}
+  function renderCaps(){
+    var l=$("cap-list");if(!l)return;
+    if(!app.caps.length){l.innerHTML='<div class="empty" style="padding:6px 0;">Nothing captured yet.</div>';return;}
+    var areaOpts=AREAS.map(function(a){return '<option>'+esc(a)+'</option>';}).join("");
+    l.innerHTML=app.caps.slice(0,8).map(function(c,i){
+      return '<div class="brain-item" data-cap-idx="'+i+'">'+
+        '<span class="d">›</span> '+esc(c.item)+
+        '<span class="spacer"></span>'+
+        '<select class="ipt cap-area" data-cap-idx="'+i+'" style="flex:0 0 auto;max-width:130px;cursor:pointer;">'+areaOpts+'</select>'+
+        '<button class="btn cyan cap-promote" data-cap-idx="'+i+'" title="Promote to task">→ Task</button>'+
+        '<button class="btn cap-del" data-cap-idx="'+i+'" title="Delete" style="color:var(--red);border-color:rgba(255,59,92,.4);">✕</button>'+
+      '</div>';
+    }).join("");
+  }
   function renderWins(){
     var full=app.wins.length?app.wins.slice(0,16).map(function(w){return '<div class="win-row"><span class="ic">◇</span> '+esc(w.title)+' <span class="date">'+esc(prettyDate(w.date))+'</span></div>';}).join(""):'<div class="empty" style="padding:6px 0;">No wins yet.</div>';
     var few=app.wins.length?app.wins.slice(0,5).map(function(w){return '<div class="win-row"><span class="ic">◇</span> '+esc(w.title)+' <span class="date">'+esc(prettyDate(w.date))+'</span></div>';}).join(""):'<div class="empty" style="padding:6px 0;">No wins logged yet.</div>';
@@ -464,6 +496,13 @@
         else if(act==="routine-add"){var nm=(($("radd-name")||{}).value||"").trim();if(!nm)return toast("Name required");var maxO=app.routines.reduce(function(m,r){return Math.max(m,+r.order||0);},0);addRoutine({name:nm,when:($("radd-when")||{}).value||"Morning",mins:+(($("radd-mins")||{}).value||0),why:($("radd-why")||{}).value||"",order:maxO+1});}
       });
     })();
+    (function(){var host=$("cap-list");if(!host)return;
+      host.addEventListener("click",function(e){
+        var p=e.target.closest(".cap-promote");var d=e.target.closest(".cap-del");
+        if(p){var i=+p.getAttribute("data-cap-idx");var sel=host.querySelector('.cap-area[data-cap-idx="'+i+'"]');promoteCapture(i,sel?sel.value:"Focus & Work");}
+        else if(d){deleteCapture(+d.getAttribute("data-cap-idx"));}
+      });
+    })();
     $("t-start").addEventListener("click",startTimer);$("t-reset").addEventListener("click",resetTimer);$("t-5").addEventListener("click",add5);
     $("btn-brief").addEventListener("click",openBrief);$("btn-fullbrief").addEventListener("click",openBrief);
     $("btn-sync").addEventListener("click",function(){boot(true);});
@@ -512,4 +551,8 @@
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
     try{await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins");if(isResync)toast("Synced");}
-    catch(e){app.mode="snapshot";setSync("snap","offline snapshot
+    catch(e){app.mode="snapshot";setSync("snap","offline snapshot · changes saved locally");renderAll();}
+  }
+
+  wire();resetTimer();tick();setInterval(tick,1000);boot(false);
+})();
