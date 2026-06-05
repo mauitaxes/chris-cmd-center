@@ -306,3 +306,20 @@ test("purgeRoutineOps: removes routine ops, keeps the rest", () => {
 test("purgeRoutineOps: empty/undefined → []", () => {
   assert.deepEqual(C.purgeRoutineOps(), []);
 });
+test("dailyReportText: includes date, task + routine + win counts", () => {
+  const txt=C.dailyReportText(
+    "2026-06-04",
+    [{done:true},{done:false},{done:true}],
+    [{done:true},{done:false}],
+    [{title:"Shipped X",date:"2026-06-04"}]
+  );
+  assert.ok(txt.includes("2026-06-04"));
+  assert.ok(txt.includes("2 of 3"));
+  assert.ok(txt.includes("1 of 2"));
+  assert.ok(txt.includes("Shipped X"));
+});
+test("dailyReportText: handles empty inputs without throwing", () => {
+  const txt=C.dailyReportText("2026-06-04", [], [], []);
+  assert.ok(txt.includes("2026-06-04"));
+  assert.ok(txt.includes("0 of 0"));
+});

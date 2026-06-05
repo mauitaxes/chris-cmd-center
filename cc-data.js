@@ -144,6 +144,21 @@
     return (ops||[]).filter(function(op){ return op && op.t!=="routine"; });
   }
 
+  // v1.5.0: plain-text end-of-day report from the ending state (pure)
+  function dailyReportText(dateStr, tasks, routines, wins){
+    tasks=tasks||[]; routines=routines||[]; wins=wins||[];
+    var td=tasks.filter(function(t){return t.done;}).length;
+    var rd=routines.filter(function(r){return r.done;}).length;
+    var dayWins=wins.filter(function(w){return (w.date||"")===dateStr;});
+    var lines=[];
+    lines.push("Daily report — "+dateStr);
+    lines.push("Tasks: "+td+" of "+tasks.length+" done.");
+    lines.push("Routine: "+rd+" of "+routines.length+" steps done.");
+    if(dayWins.length){ lines.push("Wins: "+dayWins.map(function(w){return w.title;}).join("; ")); }
+    else { lines.push("Wins: none logged."); }
+    return lines.join("\n");
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -162,7 +177,8 @@
     groupTasksByArea: groupTasksByArea,
     needsDailyReset: needsDailyReset,
     clearedRoutines: clearedRoutines,
-    purgeRoutineOps: purgeRoutineOps
+    purgeRoutineOps: purgeRoutineOps,
+    dailyReportText: dailyReportText
   };
 });
 /*__CC_DATA_END__*/
