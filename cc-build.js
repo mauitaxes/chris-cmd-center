@@ -4,7 +4,7 @@ const fs=require("fs"),path=require("path");
 const ROOT=__dirname;
 const tpl =fs.readFileSync(path.join(ROOT,"src","index.html"),"utf8");
 const css =fs.readFileSync(path.join(ROOT,"src","styles.css"),"utf8").replace(/\n$/,"");
-const app =fs.readFileSync(path.join(ROOT,"src","app.js"),"utf8").replace(/\n$/,"");
+const app =(fs.readFileSync(path.join(ROOT,"src","app.a.js"),"utf8")+fs.readFileSync(path.join(ROOT,"src","app.b.js"),"utf8")).replace(/\n$/,"");
 const data=fs.readFileSync(path.join(ROOT,"cc-data.js"),"utf8").trim();
 const re=/\/\*__CC_DATA_START__\*\/[\s\S]*?\/\*__CC_DATA_END__\*\//;
 if(!re.test(tpl)){console.error("DATA MARKERS NOT FOUND");process.exit(1);}
