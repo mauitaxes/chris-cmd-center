@@ -131,6 +131,14 @@
     return String(lastResetDate) !== String(todayStr);
   }
 
+  // v1.5.0: return a copy of routines with every done flag cleared (pure)
+  function clearedRoutines(routines){
+    return (routines||[]).map(function(r){
+      var c={}; for(var k in r){ if(Object.prototype.hasOwnProperty.call(r,k)) c[k]=r[k]; }
+      c.done=false; return c;
+    });
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -147,7 +155,8 @@
     newRoutineProps: newRoutineProps,
     reorderSwap: reorderSwap,
     groupTasksByArea: groupTasksByArea,
-    needsDailyReset: needsDailyReset
+    needsDailyReset: needsDailyReset,
+    clearedRoutines: clearedRoutines
   };
 });
 /*__CC_DATA_END__*/

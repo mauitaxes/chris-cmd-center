@@ -284,3 +284,18 @@ test("needsDailyReset: missing/empty last date → true (first run ever)", () =>
   assert.equal(C.needsDailyReset("", "2026-06-05"), true);
   assert.equal(C.needsDailyReset(undefined, "2026-06-05"), true);
 });
+test("clearedRoutines: sets every done to false, preserves other fields", () => {
+  const inp=[{id:"a",name:"X",done:true,order:1},{id:"b",name:"Y",done:false,order:2}];
+  const out=C.clearedRoutines(inp);
+  assert.deepEqual(out.map(r=>r.done), [false,false]);
+  assert.equal(out[0].name, "X");
+  assert.equal(out[1].order, 2);
+});
+test("clearedRoutines: does not mutate the input", () => {
+  const inp=[{id:"a",done:true}];
+  C.clearedRoutines(inp);
+  assert.equal(inp[0].done, true);
+});
+test("clearedRoutines: handles empty/undefined", () => {
+  assert.deepEqual(C.clearedRoutines(), []);
+});
