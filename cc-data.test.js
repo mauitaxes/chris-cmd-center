@@ -272,3 +272,15 @@ test("applyOps: taskAdd missing area falls back to Focus & Work", () => {
   const r = C.applyOps({tasks:[]}, [{t:"taskAdd",tmpid:"t1",title:"X"}]);
   assert.equal(r.tasks[0].area, "Focus & Work");
 });
+
+// ── Group 7: v1.5.0 reset engine ──────────────────────────────────────────
+test("needsDailyReset: different day → true", () => {
+  assert.equal(C.needsDailyReset("2026-06-04", "2026-06-05"), true);
+});
+test("needsDailyReset: same day → false", () => {
+  assert.equal(C.needsDailyReset("2026-06-05", "2026-06-05"), false);
+});
+test("needsDailyReset: missing/empty last date → true (first run ever)", () => {
+  assert.equal(C.needsDailyReset("", "2026-06-05"), true);
+  assert.equal(C.needsDailyReset(undefined, "2026-06-05"), true);
+});

@@ -125,6 +125,12 @@
     return groups;
   }
 
+  // v1.5.0: true when the stored reset date is missing or not today (HST string compare)
+  function needsDailyReset(lastResetDate, todayStr){
+    if(!lastResetDate) return true;
+    return String(lastResetDate) !== String(todayStr);
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -140,7 +146,8 @@
     routinePropsFor: routinePropsFor,
     newRoutineProps: newRoutineProps,
     reorderSwap: reorderSwap,
-    groupTasksByArea: groupTasksByArea
+    groupTasksByArea: groupTasksByArea,
+    needsDailyReset: needsDailyReset
   };
 });
 /*__CC_DATA_END__*/
