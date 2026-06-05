@@ -511,8 +511,5 @@
     // Live path works two ways: Cowork bridge (ok===true) OR the Netlify notion-proxy (no bridge).
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
-    try{await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins");if(isResync)toast("Synced");}
-    catch(e){app.mode="snapshot";setSync("snap","offline snapshot · changes saved locally");renderAll();}
-  }
-
-  wire();resetTi
+    try{await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins");if(isResync)toast("Synced");}
+    catch(e){app.mode="snapshot";setSync("snap","offline snapshot
