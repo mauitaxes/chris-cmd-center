@@ -439,7 +439,19 @@
   // -- Group 4: mergeState, replaceStateBlock --
   function mergeState(currentJson, updates){
     var base={}; try{ base=JSON.parse(currentJson)||{}; }catch(e){ base={}; }
-    for(var k in updates){ if(Object.prototype.hasOwnProperty.call(updates,k)) base[k]=updates[k]; }
+    for(var k in updates){
+      if(!Object.prototype.hasOwnProperty.call(updates,k)) continue;
+      // taskIds ONLY: union (base order kept, new appended, no dupes) so a stale
+      // snapshot in `updates` can never drop ids registered by another writer.
+      // All other keys (incl. routineIds, which legitimately shrinks) replace.
+      if(k==="taskIds"&&Array.isArray(base.taskIds)&&Array.isArray(updates.taskIds)){
+        var merged=base.taskIds.slice();
+        updates.taskIds.forEach(function(id){ if(merged.indexOf(id)===-1) merged.push(id); });
+        base.taskIds=merged;
+      } else {
+        base[k]=updates[k];
+      }
+    }
     return JSON.stringify(base);
   }
   function replaceStateBlock(pageMarkdown, newJson){
@@ -790,7 +802,20 @@
       if(op.t==="task")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Done:op.done?"__YES__":"__NO__"}});
       else if(op.t==="prio")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Priority:op.priority?"__YES__":"__NO__"}});
       else if(op.t==="routine")await call(T.update,{page_id:op.id,command:"update_properties",properties:{"Done Today":op.done?"__YES__":"__NO__"}});
-      else if(op.t==="taskAdd")await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:op.title,Area:op.area||"Focus & Work",Done:"__NO__","date:Created:start":todayHST()}}]});
+      else if(op.t==="taskAdd"){
+        // replay-safe: adopt an existing row with the same title (dedupe), else create; always register the id
+        var tid=null;
+        var existing=await searchIds("tasks",op.title,100);
+        var hit=existing.filter(function(x){return x.title===op.title;})[0];
+        if(hit){tid=hit.id;}
+        else{
+          var tr=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:op.title,Area:op.area||"Focus & Work",Done:"__NO__","date:Created:start":todayHST()}}]});
+          var to=toObj(tr);tid=to&&to.pages&&to.pages[0]&&to.pages[0].id;
+        }
+        if(!tid)throw new Error("taskAdd replay: no id");
+        var lt=app.tasks.filter(function(x){return x.id===op.tmpid;})[0];if(lt)lt.id=tid;
+        await saveState({taskIds:CCData.registerId(app.state.taskIds,tid)});
+      }
       else if(op.t==="win")await call(T.create,{parent:{data_source_id:DBS.wins},pages:[{properties:{Win:op.title,"date:Date:start":op.date}}]});
       else if(op.t==="cap")await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:op.item,Processed:"__NO__","date:Captured:start":todayHST()}}]});
       else if(op.t==="focus")await call(T.create,{parent:{data_source_id:DBS.focusSessions},pages:[{properties:{Session:"Focus "+op.min+"m "+todayHST(),"date:Date:start":todayHST(),Minutes:op.min,Type:"Focus"}}]});
@@ -840,8 +865,8 @@
     if(app.mode==="live"){try{await call(T.update,{page_id:r.id,command:"update_properties",properties:{"Done Today":r.done?"__YES__":"__NO__","date:Last Done:start":r.done?todayHST():null}});lsRemove({t:"routine",id:r.id,done:r.done});}catch(e){noteQueued();}}
   }
   async function addTask(title,area){title=(title||"").trim();if(!title)return;area=area||"Focus & Work";var tmp="tmp-"+Date.now();app.tasks.unshift({id:tmp,title:title,area:area,done:false,priority:false,due:"",energy:"",time:""});renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();renderTopStats();toast("Task added");
-    lsPush({t:"taskAdd",title:title,tmpid:tmp,area:area});
-    if(app.mode==="live"){try{var r=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:title,Area:area,Done:"__NO__","date:Created:start":todayHST()}}]});var o=toObj(r);var id=o&&o.pages&&o.pages[0]&&o.pages[0].id;if(id){app.tasks[0].id=id;lsRemove({t:"taskAdd",title:title,tmpid:tmp});}}catch(e){noteQueued();}}
+    var op={t:"taskAdd",title:title,tmpid:tmp,area:area};lsPush(op);
+    if(app.mode==="live"){try{var r=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:title,Area:area,Done:"__NO__","date:Created:start":todayHST()}}]});var o=toObj(r);var id=o&&o.pages&&o.pages[0]&&o.pages[0].id;if(id){app.tasks[0].id=id;lsRemove(op);await saveState({taskIds:CCData.registerId(app.state.taskIds,id)});}}catch(e){noteQueued();}}
   }
   async function addCapture(item){item=(item||"").trim();if(!item)return;app.caps.unshift({id:null,item:item});renderCaps();renderTopStats();toast("Captured");
     lsPush({t:"cap",item:item});
@@ -853,12 +878,12 @@
     app.tasks.unshift({id:tmp,title:item,area:area,done:false,priority:false,due:"",energy:"",time:""});
     app.caps.splice(idx,1);
     renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();renderCaps();renderTopStats();toast("Promoted to "+area);
-    lsPush({t:"taskAdd",title:item,tmpid:tmp,area:area});
+    var op={t:"taskAdd",title:item,tmpid:tmp,area:area};lsPush(op);
     if(capId)lsPush({t:"capDel",id:capId});
     if(app.mode==="live"){try{
       var r=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:item,Area:area,Done:"__NO__","date:Created:start":todayHST()}}]});
       var o=toObj(r);var id=o&&o.pages&&o.pages[0]&&o.pages[0].id;
-      if(id){var nt=app.tasks.filter(function(x){return x.id===tmp;})[0];if(nt)nt.id=id;lsRemove({t:"taskAdd",title:item,tmpid:tmp});await saveState({taskIds:CCData.registerId(app.state.taskIds,id)});}
+      if(id){var nt=app.tasks.filter(function(x){return x.id===tmp;})[0];if(nt)nt.id=id;lsRemove(op);await saveState({taskIds:CCData.registerId(app.state.taskIds,id)});}
       if(capId){await call(T.update,{page_id:capId,command:"update_properties",properties:{Processed:"__YES__"}});lsRemove({t:"capDel",id:capId});}
     }catch(e){noteQueued();toast("Promote queued — will finish on next sync");}}
   }

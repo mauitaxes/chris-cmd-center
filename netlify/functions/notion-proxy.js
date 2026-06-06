@@ -65,6 +65,15 @@ export function extractJsonFence(markdown) {
   return m2 ? m2[1].trim() : "";
 }
 
+// Notion caps each rich_text element at 2000 chars; split long strings into segments.
+export function chunkRichText(s, max = 2000) {
+  s = String(s == null ? "" : s);
+  if (!s) return [{ type: "text", text: { content: "" } }];
+  const out = [];
+  for (let i = 0; i < s.length; i += max) out.push({ type: "text", text: { content: s.slice(i, i + max) } });
+  return out;
+}
+
 // REST page.properties -> MCP <properties> object (READS).
 export function encodePropsToMcp(restProps) {
   const out = {};
@@ -126,7 +135,7 @@ export function mcpPropsToRest(mcpProps, dataSourceId) {
         break;
       case "rich_text":
       default:
-        out[key] = { rich_text: [{ type: "text", text: { content: String(value) } }] };
+        out[key] = { rich_text: chunkRichText(String(value)) };
         break;
     }
   }
@@ -217,7 +226,7 @@ export async function dispatch({ name, args, fetchImpl }) {
           throw err;
         }
         await notionReq(f, "PATCH", "/blocks/" + codeBlock.id, {
-          code: { rich_text: [{ type: "text", text: { content: newJson } }] },
+          code: { rich_text: chunkRichText(newJson) },
         });
         return { ok: true };
       }

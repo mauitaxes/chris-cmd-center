@@ -58,7 +58,19 @@
   // -- Group 4: mergeState, replaceStateBlock --
   function mergeState(currentJson, updates){
     var base={}; try{ base=JSON.parse(currentJson)||{}; }catch(e){ base={}; }
-    for(var k in updates){ if(Object.prototype.hasOwnProperty.call(updates,k)) base[k]=updates[k]; }
+    for(var k in updates){
+      if(!Object.prototype.hasOwnProperty.call(updates,k)) continue;
+      // taskIds ONLY: union (base order kept, new appended, no dupes) so a stale
+      // snapshot in `updates` can never drop ids registered by another writer.
+      // All other keys (incl. routineIds, which legitimately shrinks) replace.
+      if(k==="taskIds"&&Array.isArray(base.taskIds)&&Array.isArray(updates.taskIds)){
+        var merged=base.taskIds.slice();
+        updates.taskIds.forEach(function(id){ if(merged.indexOf(id)===-1) merged.push(id); });
+        base.taskIds=merged;
+      } else {
+        base[k]=updates[k];
+      }
+    }
     return JSON.stringify(base);
   }
   function replaceStateBlock(pageMarkdown, newJson){

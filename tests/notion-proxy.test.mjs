@@ -8,6 +8,7 @@ const {
   mcpPropsToRest,
   extractJsonFence,
   parseDataSourceUrl,
+  chunkRichText,
   dispatch,
   handler,
 } = await import("../netlify/functions/notion-proxy.js");
@@ -298,6 +299,74 @@ test("SECURITY: no response body ever contains the token string", async () => {
   assert.ok(!JSON.stringify(r).includes("secret_TESTTOKEN"));
   // Confirm the Authorization header WAS sent to Notion (token used server-side)
   assert.match(fetchImpl.calls[0].opts.headers.Authorization, /Bearer secret_TESTTOKEN/);
+});
+
+test("chunkRichText: short string -> one segment; empty -> one empty segment", () => {
+  assert.deepEqual(chunkRichText("hello"), [{ type: "text", text: { content: "hello" } }]);
+  assert.deepEqual(chunkRichText(""), [{ type: "text", text: { content: "" } }]);
+});
+
+test("chunkRichText: 2012 chars -> 2 segments, each <=2000, lossless join", () => {
+  const s = "x".repeat(2000) + "y".repeat(12);
+  const segs = chunkRichText(s);
+  assert.equal(segs.length, 2);
+  for (const seg of segs) assert.ok(seg.text.content.length <= 2000);
+  assert.equal(segs.map((seg) => seg.text.content).join(""), s);
+});
+
+test("update_content with >2000-char JSON PATCHes chunked rich_text", async () => {
+  const ids = [];
+  for (let i = 0; i < 60; i++) ids.push("37478f3d-415b-814c-8c65-dd76b6ab" + String(i).padStart(4, "0"));
+  const newJson = JSON.stringify({ streak: 12, taskIds: ids });
+  assert.ok(newJson.length > 2000, "fixture JSON exceeds 2000 chars");
+  const newStr = "# State\n```json\n" + newJson + "\n```\n";
+  const fetchImpl = mockFetch([
+    {
+      match: (url, o) => url.includes("/children") && (!o.method || o.method === "GET"),
+      respond: () => ({
+        body: { results: [{ id: "code-block-1", type: "code", code: { rich_text: plainText("old") } }] },
+      }),
+    },
+    {
+      match: (url, o) => url.includes("/blocks/code-block-1") && o.method === "PATCH",
+      respond: () => ({ body: { id: "code-block-1" } }),
+    },
+  ]);
+  const r = await dispatch({
+    name: FULL("notion-update-page"),
+    args: { page_id: STATE_ID, command: "update_content", content_updates: [{ old_str: "x", new_str: newStr }] },
+    fetchImpl,
+  });
+  const patch = fetchImpl.calls.find((c) => c.opts.method === "PATCH");
+  const segs = patch.body.code.rich_text;
+  assert.ok(segs.length >= 2, "chunked into multiple segments");
+  for (const seg of segs) assert.ok(seg.text.content.length <= 2000, "each segment <=2000");
+  assert.equal(segs.map((seg) => seg.text.content).join(""), newJson, "lossless");
+  assert.deepEqual(r, { ok: true });
+});
+
+test("notion-fetch State page concatenates multi-segment code rich_text (round-trip)", async () => {
+  const long = JSON.stringify({ pad: "z".repeat(2500) });
+  const segs = chunkRichText(long);
+  assert.ok(segs.length >= 2, "fixture spans segments");
+  const fetchImpl = mockFetch([
+    {
+      match: (url) => url.includes("/blocks/") && url.includes("/children"),
+      respond: () => ({ body: { results: [{ type: "code", code: { rich_text: segs } }] } }),
+    },
+  ]);
+  const r = await dispatch({ name: FULL("notion-fetch"), args: { id: STATE_ID }, fetchImpl });
+  const text = r.content.map((c) => c.text).join("");
+  assert.ok(text.includes(long), "full JSON reassembled from segments");
+});
+
+test("mcpPropsToRest chunks >2000-char rich_text values", () => {
+  const long = "n".repeat(4500);
+  const rest = mcpPropsToRest({ Notes: long }, "fb432308-59b9-4078-92db-a83c6279957d");
+  const segs = rest.Notes.rich_text;
+  assert.equal(segs.length, 3);
+  for (const seg of segs) assert.ok(seg.text.content.length <= 2000);
+  assert.equal(segs.map((seg) => seg.text.content).join(""), long);
 });
 
 test("CORS: same-origin sets Allow-Origin; cross-origin omits it", async () => {

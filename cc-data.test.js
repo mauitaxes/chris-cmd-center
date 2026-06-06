@@ -96,6 +96,23 @@ test("mergeState: merges updates, preserves unaffected fields", () => {
   assert.equal(result.focusMinutesToday, 25);
   assert.deepEqual(result.databases, {tasks:"x"});
 });
+test("mergeState: taskIds union — base order kept, new appended, no dupes", () => {
+  const result = JSON.parse(C.mergeState('{"taskIds":["a","b"]}', {taskIds:["b","c"]}));
+  assert.deepEqual(result.taskIds, ["a","b","c"]);
+});
+test("mergeState: stale snapshot cannot drop ids another writer registered", () => {
+  const result = JSON.parse(C.mergeState('{"taskIds":["a","b","c"]}', {taskIds:["a","b","d"]}));
+  assert.ok(result.taskIds.includes("c"), "id registered by other writer survives");
+  assert.ok(result.taskIds.includes("d"), "new id added");
+});
+test("mergeState: routineIds still replaced wholesale (legitimately shrinks)", () => {
+  const result = JSON.parse(C.mergeState('{"routineIds":["r1","r2","r3"]}', {routineIds:["r1","r3"]}));
+  assert.deepEqual(result.routineIds, ["r1","r3"]);
+});
+test("mergeState: taskIds set when base has none", () => {
+  const result = JSON.parse(C.mergeState('{"streak":1}', {taskIds:["a"]}));
+  assert.deepEqual(result.taskIds, ["a"]);
+});
 test("replaceStateBlock: replaces fence in STATE_TEXT", () => {
   const out = C.replaceStateBlock(F.STATE_TEXT, '{"streak":13}');
   assert.ok(out.includes('```json\n{"streak":13}\n```'));
