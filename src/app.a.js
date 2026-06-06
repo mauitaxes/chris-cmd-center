@@ -79,10 +79,12 @@
   function saveReport(d,txt){try{localStorage.setItem(reportKey(d),txt);}catch(e){}}
   // background-only: persist the report to the Capture DB, hidden from triage (Processed=YES)
   function pushReportToNotion(d,txt){
+    var op={t:"report",date:d,txt:txt};
+    lsPush(op);
     if(app.mode!=="live")return;
     call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{
       Item:"[Daily Report "+d+"]", Notes:txt, Processed:"__YES__", "date:Captured:start":d
-    }}]}).catch(function(){});
+    }}]}).then(function(){lsRemove(op);}).catch(function(){});
   }
 
   // parsing helpers (unwrap/deepText/toText/parseProps) provided by CCData via aliases above; toObj kept inline
@@ -106,7 +108,7 @@
     if(!hasBridge()){
       try{
         var resp=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
-        if(!resp.ok)throw new Error("proxy "+resp.status);
+        if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}throw new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));}
         var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return j;
       }catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
     }
@@ -135,6 +137,10 @@
   }
   var toastTimer=null;
   function toast(msg){var t=$("toast");t.textContent=msg;t.classList.add("show");clearTimeout(toastTimer);toastTimer=setTimeout(function(){t.classList.remove("show");},1800);}
+  function noteQueued(){
+    var pc=(lsGet().pending||[]).length;
+    if(pc>0)setSync(app.mode==="live"?"live":"snap",pc+" change"+(pc===1?"":"s")+" queued — press Sync to retry");
+  }
   function ring(id,pct){var c=$(id);if(!c)return;var off=314*(1-Math.max(0,Math.min(1,pct)));c.setAttribute("stroke-dashoffset",off.toFixed(1));}
 
   // ---- snapshot load ----
@@ -156,6 +162,8 @@
       else if(op.t==="win"){app.wins.unshift({title:op.title,date:op.date});}
       else if(op.t==="cap"){app.caps.unshift({id:null,item:op.item});}
       else if(op.t==="focus"){app.state.focusMinutesToday=(+app.state.focusMinutesToday||0)+op.min;}
+      else if(op.t==="capDel"){app.caps=app.caps.filter(function(z){return z.id!==op.id;});}
+      else if(op.t==="state"){Object.assign(app.state,op.updates);}
     });
   }
 
@@ -192,7 +200,8 @@
     app.caps=caps;
   }
   async function flushPending(){
-    var o=lsGet();var p=o.pending||[];if(!p.length)return;
+    var o=lsGet();var p=o.pending||[];if(!p.length)return 0;
+    var failed=[];
     for(var i=0;i<p.length;i++){var op=p[i];try{
       if(op.t==="task")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Done:op.done?"__YES__":"__NO__"}});
       else if(op.t==="prio")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Priority:op.priority?"__YES__":"__NO__"}});
@@ -201,24 +210,29 @@
       else if(op.t==="win")await call(T.create,{parent:{data_source_id:DBS.wins},pages:[{properties:{Win:op.title,"date:Date:start":op.date}}]});
       else if(op.t==="cap")await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:op.item,Processed:"__NO__","date:Captured:start":todayHST()}}]});
       else if(op.t==="focus")await call(T.create,{parent:{data_source_id:DBS.focusSessions},pages:[{properties:{Session:"Focus "+op.min+"m "+todayHST(),"date:Date:start":todayHST(),Minutes:op.min,Type:"Focus"}}]});
-    }catch(e){}}
-    lsClear();
+      else if(op.t==="capDel")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Processed:"__YES__"}});
+      else if(op.t==="report")await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:"[Daily Report "+op.date+"]",Notes:op.txt,Processed:"__YES__","date:Captured:start":op.date}}]});
+      else if(op.t==="state")await writeStateNow(op.updates);
+    }catch(e){failed.push(op);}}
+    var o2=lsGet();o2.pending=failed;lsSet(o2);
+    return failed.length;
+  }
+  async function writeStateNow(updates){
+    var fresh=await call(T.fetch,{id:STATE_PAGE});
+    var md=CCData.deepText(fresh);
+    var mm=md.match(/```json\s*([\s\S]*?)```/);
+    var curJson=mm?mm[1].trim():JSON.stringify(app.state);
+    var newJson=CCData.mergeState(curJson,updates);
+    var newMd=CCData.replaceStateBlock(md,newJson);
+    await call(T.update,{page_id:STATE_PAGE,command:"update_content",content_updates:[{old_str:md,new_str:newMd}]});
+    app.stateJson=newJson;app.state=JSON.parse(newJson);
   }
   async function saveState(updates){
     Object.assign(app.state,updates);
-    if(app.mode!=="live")return;
+    if(app.mode!=="live"){lsPush({t:"state",updates:updates});return;}
     for(var attempt=0;attempt<2;attempt++){
-      try{
-        var fresh=await call(T.fetch,{id:STATE_PAGE});
-        var md=CCData.deepText(fresh);
-        var mm=md.match(/```json\s*([\s\S]*?)```/);
-        var curJson=mm?mm[1].trim():JSON.stringify(app.state);
-        var newJson=CCData.mergeState(curJson,updates);
-        var newMd=CCData.replaceStateBlock(md,newJson);
-        await call(T.update,{page_id:STATE_PAGE,command:"update_content",content_updates:[{old_str:md,new_str:newMd}]});
-        app.stateJson=newJson;app.state=JSON.parse(newJson);
-        return;
-      }catch(e){if(attempt===1){DIAG.err="saveState failed: "+((e&&e.message)||e);}}
+      try{await writeStateNow(updates);return;}
+      catch(e){if(attempt===1){DIAG.err="saveState failed: "+((e&&e.message)||e);lsPush({t:"state",updates:updates});noteQueued();}}
     }
   }
 
@@ -227,27 +241,27 @@
   async function toggleTask(t){
     t.done=!t.done;renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();
     lsPush({t:"task",id:t.id,done:t.done});
-    if(app.mode==="live"){try{await call(T.update,{page_id:t.id,command:"update_properties",properties:{Done:t.done?"__YES__":"__NO__"}});lsRemove({t:"task",id:t.id,done:t.done});}catch(e){}}
+    if(app.mode==="live"){try{await call(T.update,{page_id:t.id,command:"update_properties",properties:{Done:t.done?"__YES__":"__NO__"}});lsRemove({t:"task",id:t.id,done:t.done});}catch(e){noteQueued();}}
     if(t.done){await saveState({lastCompleted:todayHST()});await maybeStreak();}
     renderTopStats();
   }
   async function togglePriority(t){
     t.priority=!t.priority;renderTasks();syncPrioStar(t.id,t.priority);renderTopStats();toast(t.priority?"Marked priority ★":"Priority cleared");
     lsPush({t:"prio",id:t.id,priority:t.priority});
-    if(app.mode==="live"){try{await call(T.update,{page_id:t.id,command:"update_properties",properties:{Priority:t.priority?"__YES__":"__NO__"}});lsRemove({t:"prio",id:t.id,priority:t.priority});}catch(e){}}
+    if(app.mode==="live"){try{await call(T.update,{page_id:t.id,command:"update_properties",properties:{Priority:t.priority?"__YES__":"__NO__"}});lsRemove({t:"prio",id:t.id,priority:t.priority});}catch(e){noteQueued();}}
   }
   async function toggleRoutine(r){
     r.done=!r.done;renderSteps();renderRoutineEditor();renderTopStats();
     lsPush({t:"routine",id:r.id,done:r.done});
-    if(app.mode==="live"){try{await call(T.update,{page_id:r.id,command:"update_properties",properties:{"Done Today":r.done?"__YES__":"__NO__","date:Last Done:start":r.done?todayHST():null}});lsRemove({t:"routine",id:r.id,done:r.done});}catch(e){}}
+    if(app.mode==="live"){try{await call(T.update,{page_id:r.id,command:"update_properties",properties:{"Done Today":r.done?"__YES__":"__NO__","date:Last Done:start":r.done?todayHST():null}});lsRemove({t:"routine",id:r.id,done:r.done});}catch(e){noteQueued();}}
   }
   async function addTask(title,area){title=(title||"").trim();if(!title)return;area=area||"Focus & Work";var tmp="tmp-"+Date.now();app.tasks.unshift({id:tmp,title:title,area:area,done:false,priority:false,due:"",energy:"",time:""});renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();renderTopStats();toast("Task added");
     lsPush({t:"taskAdd",title:title,tmpid:tmp,area:area});
-    if(app.mode==="live"){try{var r=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:title,Area:area,Done:"__NO__","date:Created:start":todayHST()}}]});var o=toObj(r);var id=o&&o.pages&&o.pages[0]&&o.pages[0].id;if(id){app.tasks[0].id=id;lsRemove({t:"taskAdd",title:title,tmpid:tmp});}}catch(e){}}
+    if(app.mode==="live"){try{var r=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:title,Area:area,Done:"__NO__","date:Created:start":todayHST()}}]});var o=toObj(r);var id=o&&o.pages&&o.pages[0]&&o.pages[0].id;if(id){app.tasks[0].id=id;lsRemove({t:"taskAdd",title:title,tmpid:tmp});}}catch(e){noteQueued();}}
   }
   async function addCapture(item){item=(item||"").trim();if(!item)return;app.caps.unshift({id:null,item:item});renderCaps();renderTopStats();toast("Captured");
     lsPush({t:"cap",item:item});
-    if(app.mode==="live"){try{var rc=await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:item,Processed:"__NO__","date:Captured:start":todayHST()}}]});var oc=toObj(rc);var cid=oc&&oc.pages&&oc.pages[0]&&oc.pages[0].id;if(cid&&app.caps[0])app.caps[0].id=cid;lsRemove({t:"cap",item:item});}catch(e){}}
+    if(app.mode==="live"){try{var rc=await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:item,Processed:"__NO__","date:Captured:start":todayHST()}}]});var oc=toObj(rc);var cid=oc&&oc.pages&&oc.pages[0]&&oc.pages[0].id;if(cid&&app.caps[0])app.caps[0].id=cid;lsRemove({t:"cap",item:item});}catch(e){noteQueued();}}
   }
   async function promoteCapture(idx, area){
     var c=app.caps[idx];if(!c)return;area=area||"Focus & Work";
@@ -256,25 +270,31 @@
     app.caps.splice(idx,1);
     renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();renderCaps();renderTopStats();toast("Promoted to "+area);
     lsPush({t:"taskAdd",title:item,tmpid:tmp,area:area});
+    if(capId)lsPush({t:"capDel",id:capId});
     if(app.mode==="live"){try{
       var r=await call(T.create,{parent:{data_source_id:DBS.tasks},pages:[{properties:{Task:item,Area:area,Done:"__NO__","date:Created:start":todayHST()}}]});
       var o=toObj(r);var id=o&&o.pages&&o.pages[0]&&o.pages[0].id;
       if(id){var nt=app.tasks.filter(function(x){return x.id===tmp;})[0];if(nt)nt.id=id;lsRemove({t:"taskAdd",title:item,tmpid:tmp});await saveState({taskIds:CCData.registerId(app.state.taskIds,id)});}
-      if(capId){await call(T.update,{page_id:capId,command:"update_properties",properties:{Processed:"__YES__"}});}
-    }catch(e){toast("Promote save failed");}}
+      if(capId){await call(T.update,{page_id:capId,command:"update_properties",properties:{Processed:"__YES__"}});lsRemove({t:"capDel",id:capId});}
+    }catch(e){noteQueued();toast("Promote queued — will finish on next sync");}}
   }
   async function deleteCapture(idx){
-    var c=app.caps[idx];if(!c)return;var capId=c.id;
+    var c=app.caps[idx];if(!c)return;var capId=c.id;var item=c.item;
     app.caps.splice(idx,1);renderCaps();renderTopStats();toast("Deleted");
-    if(app.mode==="live"&&capId){try{await call(T.update,{page_id:capId,command:"update_properties",properties:{Processed:"__YES__"}});}catch(e){}}
+    if(!capId){
+      var o=lsGet();o.pending=(o.pending||[]).filter(function(p){return !(p.t==="cap"&&p.item===item);});lsSet(o);
+      return;
+    }
+    lsPush({t:"capDel",id:capId});
+    if(app.mode==="live"){try{await call(T.update,{page_id:capId,command:"update_properties",properties:{Processed:"__YES__"}});lsRemove({t:"capDel",id:capId});}catch(e){noteQueued();}}
   }
   async function addWin(title){title=(title||"").trim();if(!title)return;var d=todayHST();app.wins.unshift({title:title,date:d});renderWins();renderTopStats();toast("Win logged");
     lsPush({t:"win",title:title,date:d});
-    if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.wins},pages:[{properties:{Win:title,"date:Date:start":d}}]});lsRemove({t:"win",title:title,date:d});}catch(e){}}
+    if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.wins},pages:[{properties:{Win:title,"date:Date:start":d}}]});lsRemove({t:"win",title:title,date:d});}catch(e){noteQueued();}}
     await saveState({lastWinDate:d});await maybeStreak();
   }
   async function logFocus(min){var fm=(+app.state.focusMinutesToday||0)+min;app.state.focusMinutesToday=fm;renderTopStats();
     lsPush({t:"focus",min:min});
-    if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.focusSessions},pages:[{properties:{Session:"Focus "+min+"m "+todayHST(),"date:Date:start":todayHST(),Minutes:min,Type:"Focus"}}]});await saveState({focusMinutesToday:fm});lsRemove({t:"focus",min:min});}catch(e){}}
+    if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.focusSessions},pages:[{properties:{Session:"Focus "+min+"m "+todayHST(),"date:Date:start":todayHST(),Minutes:min,Type:"Focus"}}]});await saveState({focusMinutesToday:fm});lsRemove({t:"focus",min:min});}catch(e){noteQueued();}}
   }
 
