@@ -262,7 +262,7 @@
     if(app.mode==="live"){
       saveState({lastResetDate:today});
       toClear.forEach(function(id){
-        call(T.update,{page_id:id,command:"update_properties",properties:{"Done Today":"__NO__"}}).catch(function(){});
+        call(T.update,{page_id:id,command:"update_properties",properties:{"Done Today":"__NO__"}}).catch(function(){lsPush({t:"routine",id:id,done:false});});
       });
     }
     return true;
@@ -279,8 +279,16 @@
     // Live path works two ways: Cowork bridge (ok===true) OR the Netlify notion-proxy (no bridge).
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
-    try{await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins");if(isResync)toast("Synced");}
-    catch(e){app.mode="snapshot";setSync("snap","offline snapshot · changes saved locally");renderAll();}
+    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):""));if(isResync)toast("Synced");}
+    catch(e){
+      app.mode="snapshot";renderAll();
+      var kind=CCData.classifySyncError(String((e&&e.message)||e)||DIAG.err);
+      var pc=(lsGet().pending||[]).length;
+      var qmsg=pc?(" · "+pc+" change"+(pc===1?"":"s")+" queued"):"";
+      if(kind==="config")setSync("err","Notion not configured — NOT syncing"+qmsg);
+      else if(kind==="auth")setSync("err","Notion access failed — NOT syncing"+qmsg);
+      else setSync("snap","offline — will sync when reconnected"+qmsg);
+    }
   }
 
   wire();resetTimer();tick();setInterval(tick,1000);boot(false);
