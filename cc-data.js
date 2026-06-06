@@ -80,6 +80,8 @@
       else if(op.t==="win"){ s.wins.unshift({title:op.title,date:op.date}); }
       else if(op.t==="cap"){ s.caps.unshift({id:null,item:op.item}); }
       else if(op.t==="focus"){ s.focusMinutesToday=(+s.focusMinutesToday||0)+op.min; }
+      else if(op.t==="capDel"){ s.caps=s.caps.filter(function(z){return z.id!==op.id;}); }
+      else if(op.t==="state"){ for(var k in op.updates){ if(Object.prototype.hasOwnProperty.call(op.updates,k)) s[k]=op.updates[k]; } }
     });
     return s;
   }
@@ -144,6 +146,14 @@
     return (ops||[]).filter(function(op){ return op && op.t!=="routine"; });
   }
 
+  // step-2 hardening: classify a sync failure message → "config" | "auth" | "offline" (pure)
+  function classifySyncError(msg){
+    var s=String(msg||"");
+    if(/proxy 500|not configured/i.test(s)) return "config";
+    if(/proxy 40[13]|unauthorized|restricted from accessing/i.test(s)) return "auth";
+    return "offline";
+  }
+
   // v1.5.0: append id to a list if truthy and not already present (pure)
   function registerId(ids, id){
     var list=(ids||[]).slice();
@@ -186,7 +196,8 @@
     needsDailyReset: needsDailyReset,
     clearedRoutines: clearedRoutines,
     purgeRoutineOps: purgeRoutineOps,
-    dailyReportText: dailyReportText
+    dailyReportText: dailyReportText,
+    classifySyncError: classifySyncError
   };
 });
 /*__CC_DATA_END__*/

@@ -335,3 +335,27 @@ test("registerId: empty/undefined base, ignores falsy id", () => {
   assert.deepEqual(C.registerId(undefined, "a"), ["a"]);
   assert.deepEqual(C.registerId(["a"], ""), ["a"]);
 });
+
+// ── Step 2 hardening: classifySyncError + capDel/state ops ────────────────
+test("classifySyncError: proxy 500 / not configured → config", () => {
+  assert.equal(C.classifySyncError('proxy 500 {"error":"server not configured"}'), "config");
+  assert.equal(C.classifySyncError("proxy 500"), "config");
+});
+test("classifySyncError: 401/403 → auth", () => {
+  assert.equal(C.classifySyncError("proxy 401"), "auth");
+  assert.equal(C.classifySyncError("proxy 403 restricted from accessing"), "auth");
+});
+test("classifySyncError: network/other/empty → offline", () => {
+  assert.equal(C.classifySyncError("Failed to fetch"), "offline");
+  assert.equal(C.classifySyncError(""), "offline");
+  assert.equal(C.classifySyncError("proxy 502"), "offline");
+});
+test("applyOps: capDel removes cap by id", () => {
+  const s = C.applyOps({tasks:[],wins:[],caps:[{id:"c1",item:"a"},{id:"c2",item:"b"}]}, [{t:"capDel",id:"c1"}]);
+  assert.deepEqual(s.caps.map(c => c.id), ["c2"]);
+});
+test("applyOps: state op merges updates onto base", () => {
+  const s = C.applyOps({tasks:[],wins:[],caps:[],streak:5}, [{t:"state",updates:{streak:6,lastCompleted:"2026-06-05"}}]);
+  assert.equal(s.streak, 6);
+  assert.equal(s.lastCompleted, "2026-06-05");
+});
