@@ -376,3 +376,25 @@ test("applyOps: state op merges updates onto base", () => {
   assert.equal(s.streak, 6);
   assert.equal(s.lastCompleted, "2026-06-05");
 });
+
+// ── Task 0: D9 runtime DB-id resolution ────────────────────────────────────
+test("missingDbKeys: returns required keys absent or falsy in the map", () => {
+  const dbs = { tasks:"id-t", wins:"", routines:"id-r" };
+  assert.deepEqual(C.missingDbKeys(dbs, ["tasks","wins","routines","dailyLog"]), ["wins","dailyLog"]);
+});
+test("missingDbKeys: empty required -> empty", () => {
+  assert.deepEqual(C.missingDbKeys({tasks:"x"}, []), []);
+});
+test("missingDbKeys: null map treats all required as missing", () => {
+  assert.deepEqual(C.missingDbKeys(null, ["tasks","wins"]), ["tasks","wins"]);
+});
+test("mergeResolvedDatabases: adds resolved ids, never overwrites existing", () => {
+  const base = { tasks:"id-t" };
+  const out = C.mergeResolvedDatabases(base, { dailyLog:"id-dl", tasks:"WRONG" });
+  assert.equal(out.tasks, "id-t");
+  assert.equal(out.dailyLog, "id-dl");
+  assert.notEqual(out, base);
+});
+test("mergeResolvedDatabases: null inputs -> empty object", () => {
+  assert.deepEqual(C.mergeResolvedDatabases(null, null), {});
+});

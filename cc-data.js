@@ -188,6 +188,20 @@
     return lines.join("\n");
   }
 
+  // -- Task 0: D9 runtime DB-id resolution --
+  // required keys absent or falsy in the databases map (pure)
+  function missingDbKeys(dbs, required){
+    dbs=dbs||{};
+    return (required||[]).filter(function(k){ return !dbs[k]; });
+  }
+  // merge resolved ids into a databases map without overwriting existing (pure)
+  function mergeResolvedDatabases(databases, resolved){
+    var out={}, k;
+    for(k in (databases||{})){ if(Object.prototype.hasOwnProperty.call(databases,k)) out[k]=databases[k]; }
+    for(k in (resolved||{})){ if(Object.prototype.hasOwnProperty.call(resolved,k) && !out[k]) out[k]=resolved[k]; }
+    return out;
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -209,7 +223,9 @@
     clearedRoutines: clearedRoutines,
     purgeRoutineOps: purgeRoutineOps,
     dailyReportText: dailyReportText,
-    classifySyncError: classifySyncError
+    classifySyncError: classifySyncError,
+    missingDbKeys: missingDbKeys,
+    mergeResolvedDatabases: mergeResolvedDatabases
   };
 });
 /*__CC_DATA_END__*/
