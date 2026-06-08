@@ -658,3 +658,42 @@ test("mergeCalendarEvents: does not mutate input arrays", () => {
   C.mergeCalendarEvents([a]);
   assert.deepEqual(a.map(e=>e.title), snapshot);
 });
+
+// ── Task 5: write helpers (quick-add, idempotency, arg builders) ───────────
+test("quickAddProjectId: known area -> its projectId; unknown/global -> 'inbox'", () => {
+  const tp = {"Finances":"p-fin","Focus & Work":"p-foc"};
+  assert.equal(C.quickAddProjectId("Focus & Work", tp), "p-foc");
+  assert.equal(C.quickAddProjectId("Finances", tp), "p-fin");
+  assert.equal(C.quickAddProjectId("Nonexistent", tp), "inbox");
+  assert.equal(C.quickAddProjectId("", tp), "inbox");
+  assert.equal(C.quickAddProjectId(undefined, undefined), "inbox");
+});
+
+test("idempotencyKey: prefixed, unique per call", () => {
+  const a = C.idempotencyKey("add");
+  const b = C.idempotencyKey("add");
+  assert.match(a, /^add-/);
+  assert.notEqual(a, b);
+  assert.match(C.idempotencyKey(), /^cc-/);   // default prefix
+});
+
+test("buildQuickAddArgs: maps title+area -> MCP add-tasks args with requestId", () => {
+  const tp = {"Focus & Work":"p-foc"};
+  const args = C.buildQuickAddArgs("  Pay GET tax  ", "Focus & Work", tp, "req-1");
+  assert.deepEqual(args.tasks, [{content:"Pay GET tax", projectId:"p-foc"}]);
+  assert.equal(args.requestId, "req-1");
+});
+
+test("buildQuickAddArgs: global capture -> inbox; empty title -> null; auto key when omitted", () => {
+  assert.equal(C.buildQuickAddArgs("   ", "Focus & Work", {}, "k"), null);
+  const g = C.buildQuickAddArgs("idea", "", {});
+  assert.equal(g.tasks[0].projectId, "inbox");
+  assert.match(g.requestId, /^add-/);
+});
+
+test("buildCompleteArgs: wraps id in ids[] with requestId (auto key when omitted)", () => {
+  assert.deepEqual(C.buildCompleteArgs("111", "req-2"), {ids:["111"], requestId:"req-2"});
+  const a = C.buildCompleteArgs(222);
+  assert.deepEqual(a.ids, ["222"]);
+  assert.match(a.requestId, /^done-/);
+});

@@ -775,6 +775,33 @@
     return out;
   }
 
+  // ---- Task 5: pure write helpers (quick-add resolution, idempotency, MCP arg builders) ----
+  // Resolve a CC area name -> its Todoist sub-project id; unknown/global capture -> "inbox".
+  function quickAddProjectId(area, todoistProjects){
+    todoistProjects=todoistProjects||{};
+    var pid=area?todoistProjects[area]:"";
+    return pid?String(pid):"inbox";
+  }
+  // Stable-per-write idempotency key (generated once, reused on retry via the offline queue) so a
+  // retried POST de-dupes server-side via the proxy's X-Request-Id. Unique per call.
+  function idempotencyKey(prefix){
+    prefix=prefix||"cc";
+    var rnd=Math.random().toString(36).slice(2,10);
+    return String(prefix)+"-"+Date.now().toString(36)+"-"+rnd;
+  }
+  // Build MCP add-tasks args from a quick-add. Returns null for empty titles. Same shape across the
+  // Cowork-MCP and deployed-proxy paths; the proxy lifts requestId into X-Request-Id.
+  function buildQuickAddArgs(title, area, todoistProjects, key){
+    title=(title||"").trim();
+    if(!title) return null;
+    return { tasks:[{content:title, projectId:quickAddProjectId(area, todoistProjects)}],
+             requestId:key||idempotencyKey("add") };
+  }
+  // Build MCP complete-tasks args for a single optimistic check-off.
+  function buildCompleteArgs(id, key){
+    return { ids:[String(id)], requestId:key||idempotencyKey("done") };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -811,7 +838,11 @@
     normalizeTodoistTask: normalizeTodoistTask,
     todoistTileCounts: todoistTileCounts,
     splitTodayPanel: splitTodayPanel,
-    mergeCalendarEvents: mergeCalendarEvents
+    mergeCalendarEvents: mergeCalendarEvents,
+    quickAddProjectId: quickAddProjectId,
+    idempotencyKey: idempotencyKey,
+    buildQuickAddArgs: buildQuickAddArgs,
+    buildCompleteArgs: buildCompleteArgs
   };
 });
 /*__CC_DATA_END__*/

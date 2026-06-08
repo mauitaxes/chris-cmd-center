@@ -5,6 +5,7 @@ process.env.TODOIST_API_TOKEN = "tdt_TESTTOKEN";
 
 const {
   restPriorityToMcp,
+  mcpPriorityToRest,
   normalizeRestTask,
   normalizeActivityEvent,
   dispatch,
@@ -144,4 +145,76 @@ test("resolveInboxId returns the inbox project id (tolerates is_inbox_project fl
       ] } }) },
   ]);
   assert.equal(await resolveInboxId(fetchImpl), "42");
+});
+
+// ---- Task 5: write ops (add-tasks, complete-tasks) ----
+test("mcpPriorityToRest inverts client priority back to REST (p1 -> 4, default -> 1)", () => {
+  assert.equal(mcpPriorityToRest("p1"), 4);
+  assert.equal(mcpPriorityToRest("p2"), 3);
+  assert.equal(mcpPriorityToRest("p3"), 2);
+  assert.equal(mcpPriorityToRest("p4"), 1);
+  assert.equal(mcpPriorityToRest(undefined), 1);
+});
+
+test("dispatch add-tasks: POSTs /tasks, inverts priority, sets X-Request-Id, returns {tasks}", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u, o) => u.endsWith("/api/v1/tasks") && o.method === "POST",
+      respond: (u, o) => { const b = JSON.parse(o.body); return { body: { id: 555, content: b.content, priority: b.priority, project_id: b.project_id, labels: [], is_completed: false } }; } },
+  ]);
+  const r = await dispatch({ name: FULL("add-tasks"), args: { tasks: [{ content: "Pay GET", projectId: "6789", priority: "p1" }], requestId: "req-abc" }, fetchImpl });
+  assert.equal(r.tasks.length, 1);
+  assert.equal(r.tasks[0].id, "555");
+  assert.equal(r.tasks[0].content, "Pay GET");
+  assert.equal(r.tasks[0].priority, "p1");
+  const c = fetchImpl.calls[0];
+  assert.equal(c.method, "POST");
+  const body = JSON.parse(c.opts.body);
+  assert.equal(body.content, "Pay GET");
+  assert.equal(body.project_id, "6789");
+  assert.equal(body.priority, 4);                       // p1 -> REST 4
+  assert.equal((c.opts.headers || {})["X-Request-Id"], "req-abc"); // single task: raw key
+  assert.equal(c.auth, "Bearer tdt_TESTTOKEN");
+  assert.equal("requestId" in body, false);             // never leaked into REST body
+});
+
+test("dispatch add-tasks: projectId 'inbox' (or absent) -> no project_id (REST defaults to Inbox)", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u, o) => u.endsWith("/api/v1/tasks") && o.method === "POST",
+      respond: (u, o) => ({ body: { id: 1, content: JSON.parse(o.body).content, priority: 1, labels: [], is_completed: false } }) },
+  ]);
+  await dispatch({ name: FULL("add-tasks"), args: { tasks: [{ content: "stray", projectId: "inbox" }] }, fetchImpl });
+  const body = JSON.parse(fetchImpl.calls[0].opts.body);
+  assert.equal("project_id" in body, false);
+});
+
+test("dispatch add-tasks: multiple tasks get per-item X-Request-Id suffixes (no dedupe collision)", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u, o) => u.endsWith("/api/v1/tasks") && o.method === "POST",
+      respond: (u, o) => ({ body: { id: Math.floor(Math.random()*1e6), content: JSON.parse(o.body).content, priority: 1, labels: [], is_completed: false } }) },
+  ]);
+  await dispatch({ name: FULL("add-tasks"), args: { tasks: [{ content: "a", projectId: "inbox" }, { content: "b", projectId: "inbox" }], requestId: "req-multi" }, fetchImpl });
+  assert.equal((fetchImpl.calls[0].opts.headers || {})["X-Request-Id"], "req-multi-0");
+  assert.equal((fetchImpl.calls[1].opts.headers || {})["X-Request-Id"], "req-multi-1");
+});
+
+test("dispatch complete-tasks: POSTs /tasks/{id}/close per id with X-Request-Id, returns success", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u, o) => /\/api\/v1\/tasks\/\d+\/close$/.test(u) && o.method === "POST",
+      respond: () => ({ status: 204, body: null }) },
+  ]);
+  const r = await dispatch({ name: FULL("complete-tasks"), args: { ids: ["111", "222"], requestId: "req-xyz" }, fetchImpl });
+  assert.equal(r.completed, 2);
+  assert.deepEqual(r.ids, ["111", "222"]);
+  assert.equal(fetchImpl.calls.length, 2);
+  assert.match(fetchImpl.calls[0].url, /\/tasks\/111\/close$/);
+  assert.equal((fetchImpl.calls[0].opts.headers || {})["X-Request-Id"], "req-xyz-0");
+});
+
+test("handler allow-list now permits add-tasks (reaches dispatch -> 200)", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ id: 9, content: "x", priority: 1, labels: [], is_completed: false }), text: async () => "{}" });
+  try {
+    const res = await handler({ httpMethod: "POST", headers: {}, body: JSON.stringify({ name: FULL("add-tasks"), args: { tasks: [{ content: "x", projectId: "inbox" }] } }) });
+    assert.equal(res.statusCode, 200);
+  } finally { globalThis.fetch = orig; }
 });

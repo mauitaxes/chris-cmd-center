@@ -1,7 +1,7 @@
 // Netlify serverless Todoist proxy for Command Center.
 // Holds TODOIST_API_TOKEN server-side; emulates the MCP output shapes the client (app.c.js TT) expects.
 // Mirrors notion-proxy.js: exported pure helpers + dispatch({name,args,fetchImpl}) + handler.
-// READS only for now (Task 3): find-tasks, find-activity, find-projects. Writes = Task 5.
+// Task 3 READS: find-tasks, find-activity, find-projects. Task 5 WRITES: add-tasks, complete-tasks (X-Request-Id idempotency).
 
 const REST_BASE = "https://api.todoist.com/api/v1";  // unified v1 (REST v2 retired 2025 -> 410 Gone); paginated {results:[]} handled below
 const SYNC_BASE = "https://api.todoist.com/sync/v9";
@@ -20,6 +20,16 @@ export function restPriorityToMcp(p) {
     case 3: return "p2";
     case 2: return "p3";
     default: return "p4";
+  }
+}
+
+// Inverse of restPriorityToMcp: client/MCP "p1"(highest) -> REST 4; "p4"(default) -> REST 1.
+export function mcpPriorityToRest(p) {
+  switch (String(p)) {
+    case "p1": return 4;
+    case "p2": return 3;
+    case "p3": return 2;
+    default: return 1;
   }
 }
 
@@ -64,8 +74,10 @@ function authHeaders() {
   };
 }
 
-async function todoistReq(fetchImpl, method, url) {
-  const res = await fetchImpl(url, { method, headers: authHeaders() });
+async function todoistReq(fetchImpl, method, url, body, extraHeaders) {
+  const opts = { method, headers: Object.assign(authHeaders(), extraHeaders || {}) };
+  if (body !== undefined && body !== null) opts.body = JSON.stringify(body);
+  const res = await fetchImpl(url, opts);
   let data = null;
   try { data = await res.json(); } catch (_) { data = null; }
   if (!res.ok) {
@@ -127,6 +139,36 @@ export async function dispatch({ name, args, fetchImpl }) {
       return { events, count: data.count != null ? data.count : events.length };
     }
 
+    case "add-tasks": {
+      const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+      const reqId = args.requestId || args.request_id || null;
+      const out = [];
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i] || {};
+        const body = { content: t.content || "" };
+        const pid = t.projectId;
+        if (pid && String(pid).toLowerCase() !== "inbox") body.project_id = String(pid);
+        if (t.priority) body.priority = mcpPriorityToRest(t.priority);
+        if (t.dueString) body.due_string = t.dueString;
+        if (Array.isArray(t.labels) && t.labels.length) body.labels = t.labels;
+        if (t.description) body.description = t.description;
+        const hdr = reqId ? { "X-Request-Id": String(reqId) + (tasks.length > 1 ? ("-" + i) : "") } : {};
+        const created = await todoistReq(f, "POST", REST_BASE + "/tasks", body, hdr);
+        out.push(normalizeRestTask(created || {}));
+      }
+      return { tasks: out, totalCount: out.length };
+    }
+
+    case "complete-tasks": {
+      const ids = Array.isArray(args.ids) ? args.ids : [];
+      const reqId = args.requestId || args.request_id || null;
+      for (let i = 0; i < ids.length; i++) {
+        const hdr = reqId ? { "X-Request-Id": String(reqId) + "-" + i } : {};
+        await todoistReq(f, "POST", REST_BASE + "/tasks/" + encodeURIComponent(ids[i]) + "/close", null, hdr);
+      }
+      return { ids: ids.map(String), completed: ids.length };
+    }
+
     default: {
       const err = new Error("operation not allowed: " + op);
       err.statusCode = 400;
@@ -165,7 +207,7 @@ export const handler = async (event) => {
   catch (_) { return { statusCode: 400, headers, body: JSON.stringify({ error: "invalid JSON body" }) }; }
 
   const op = suffix(payload.name || "");
-  const allowed = ["find-tasks", "find-activity", "find-projects"];
+  const allowed = ["find-tasks", "find-activity", "find-projects", "add-tasks", "complete-tasks"];
   if (!allowed.includes(op)) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: "operation not allowed" }) };
   }
