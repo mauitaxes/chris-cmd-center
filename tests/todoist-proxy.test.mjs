@@ -9,6 +9,7 @@ const {
   normalizeActivityEvent,
   dispatch,
   handler,
+  resolveInboxId,
 } = await import("../netlify/functions/todoist-proxy.js");
 
 const FULL = (s) => "mcp__b9779bcc-3581-4f0e-bef4-401bb840378a__" + s;
@@ -112,4 +113,35 @@ test("dispatch unknown op -> 400", async () => {
 test("handler rejects non-allowed op with 400", async () => {
   const res = await handler({ httpMethod: "POST", headers: {}, body: JSON.stringify({ name: FULL("delete-everything"), args: {} }) });
   assert.equal(res.statusCode, 400);
+});
+
+test("dispatch find-tasks projectId=inbox: resolves inbox id via /projects, then queries by that id", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u) => u.includes("/api/v1/projects"),
+      respond: () => ({ body: { results: [
+        { id: 6001, name: "Inbox", is_inbox_project: true },
+        { id: 6002, name: "Command Center", is_inbox_project: false },
+      ] } }) },
+    { match: (u) => u.includes("/api/v1/tasks"),
+      respond: () => ({ body: { results: [
+        { id: 9, content: "stray note", priority: 1, project_id: 6001, is_completed: false, labels: [] },
+      ] } }) },
+  ]);
+  const r = await dispatch({ name: FULL("find-tasks"), args: { projectId: "inbox" }, fetchImpl });
+  assert.equal(r.tasks.length, 1);
+  // first call hits /projects, second hits /tasks with the RESOLVED numeric id (not "inbox")
+  assert.match(fetchImpl.calls[0].url, /\/projects/);
+  assert.match(fetchImpl.calls[1].url, /project_id=6001/);
+  assert.doesNotMatch(fetchImpl.calls[1].url, /project_id=inbox/);
+});
+
+test("resolveInboxId returns the inbox project id (tolerates is_inbox_project flag variants)", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u) => u.includes("/api/v1/projects"),
+      respond: () => ({ body: { results: [
+        { id: 1, name: "Work", inbox_project: false },
+        { id: 42, name: "Inbox", inbox_project: true },
+      ] } }) },
+  ]);
+  assert.equal(await resolveInboxId(fetchImpl), "42");
 });

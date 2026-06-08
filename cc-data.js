@@ -321,6 +321,35 @@
     return { open:open, p1:p1, areasActive:Object.keys(areas).length, byArea:byArea };
   }
 
+  // Today panel split: bucket open tasks into today vs overdue (HST date strings), collapse a long
+  // overdue list past threshold. due compared on date-prefix so MCP datetimes ("...T08:00:00") and
+  // proxy date-only both work. today = due-today | labelled "today" | priority (future/no-due). (pure, Task 3b)
+  function splitTodayPanel(tasks, opts){
+    opts=opts||{};
+    var todayStr=String(opts.today||"");
+    var threshold=(opts.threshold==null)?5:opts.threshold;
+    var today=[], overdue=[];
+    (tasks||[]).forEach(function(t){
+      if(t.done) return;
+      var due=String(t.due||"").slice(0,10);
+      var labels=Array.isArray(t.labels)?t.labels:[];
+      if(due && todayStr && due<todayStr){ overdue.push(t); }
+      else if(due===todayStr || labels.indexOf("today")!==-1 || t.priority){ today.push(t); }
+    });
+    today.sort(function(a,b){
+      var ap=a.priority?0:1, bp=b.priority?0:1; if(ap!==bp) return ap-bp;
+      var ad=String(a.due||"").slice(0,10)||"9999-99-99", bd=String(b.due||"").slice(0,10)||"9999-99-99";
+      if(ad<bd) return -1; if(ad>bd) return 1;
+      return String(a.title||"").localeCompare(String(b.title||""));
+    });
+    overdue.sort(function(a,b){
+      var ad=String(a.due||"").slice(0,10), bd=String(b.due||"").slice(0,10);
+      return ad<bd?-1:(ad>bd?1:0);
+    });
+    return { today:today, overdue:overdue, overdueCount:overdue.length,
+      overdueCollapsed:overdue.length>threshold, threshold:threshold };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -355,7 +384,8 @@
     completedInTreeOnDay: completedInTreeOnDay,
     stripCcMarkers: stripCcMarkers,
     normalizeTodoistTask: normalizeTodoistTask,
-    todoistTileCounts: todoistTileCounts
+    todoistTileCounts: todoistTileCounts,
+    splitTodayPanel: splitTodayPanel
   };
 });
 /*__CC_DATA_END__*/

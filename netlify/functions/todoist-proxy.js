@@ -77,6 +77,15 @@ async function todoistReq(fetchImpl, method, url) {
   return data;
 }
 
+// Resolve the literal "inbox" projectId -> the real inbox project id. REST /tasks rejects
+// "inbox"; the MCP accepts it. We mirror the MCP by looking up is_inbox_project from /projects.
+export async function resolveInboxId(fetchImpl) {
+  const data = await todoistReq(fetchImpl, "GET", REST_BASE + "/projects");
+  const arr = Array.isArray(data) ? data : (data.results || []);
+  const inbox = arr.find((p) => p.is_inbox_project || p.inbox_project || p.isInboxProject || p.inboxProject);
+  return inbox ? String(inbox.id) : "";
+}
+
 // ---- core dispatch (injectable fetchImpl) ----
 export async function dispatch({ name, args, fetchImpl }) {
   const f = fetchImpl || globalThis.fetch;
@@ -86,7 +95,11 @@ export async function dispatch({ name, args, fetchImpl }) {
   switch (op) {
     case "find-tasks": {
       const qs = [];
-      if (args.projectId) qs.push("project_id=" + encodeURIComponent(args.projectId));
+      let projectId = args.projectId;
+      if (projectId && String(projectId).toLowerCase() === "inbox") {
+        projectId = await resolveInboxId(f);   // REST needs the real id, not "inbox"
+      }
+      if (projectId) qs.push("project_id=" + encodeURIComponent(projectId));
       if (args.filter) qs.push("filter=" + encodeURIComponent(args.filter));
       const url = REST_BASE + "/tasks" + (qs.length ? "?" + qs.join("&") : "");
       const data = await todoistReq(f, "GET", url);

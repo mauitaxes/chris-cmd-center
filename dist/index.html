@@ -261,6 +261,16 @@
               </div>
               <div id="task-list"><div class="empty">Loading tasks…</div></div>
             </div>
+            <div class="card col-gap" style="padding:0;">
+              <div class="panel-head">
+                <span class="panel-title">Today · Todoist</span>
+                <span class="tag cyan" style="margin-left:8px;">preview</span>
+                <div class="spacer"></div>
+                <span class="count-chip" id="td-inbox-chip" style="display:none;cursor:pointer;">Inbox 0</span>
+                <span class="count-chip" id="td-today-count" style="margin-left:8px;">—</span>
+              </div>
+              <div id="td-today-list"><div class="empty">Loading Todoist…</div></div>
+            </div>
           </div>
 
           <div>
@@ -702,6 +712,35 @@
     return { open:open, p1:p1, areasActive:Object.keys(areas).length, byArea:byArea };
   }
 
+  // Today panel split: bucket open tasks into today vs overdue (HST date strings), collapse a long
+  // overdue list past threshold. due compared on date-prefix so MCP datetimes ("...T08:00:00") and
+  // proxy date-only both work. today = due-today | labelled "today" | priority (future/no-due). (pure, Task 3b)
+  function splitTodayPanel(tasks, opts){
+    opts=opts||{};
+    var todayStr=String(opts.today||"");
+    var threshold=(opts.threshold==null)?5:opts.threshold;
+    var today=[], overdue=[];
+    (tasks||[]).forEach(function(t){
+      if(t.done) return;
+      var due=String(t.due||"").slice(0,10);
+      var labels=Array.isArray(t.labels)?t.labels:[];
+      if(due && todayStr && due<todayStr){ overdue.push(t); }
+      else if(due===todayStr || labels.indexOf("today")!==-1 || t.priority){ today.push(t); }
+    });
+    today.sort(function(a,b){
+      var ap=a.priority?0:1, bp=b.priority?0:1; if(ap!==bp) return ap-bp;
+      var ad=String(a.due||"").slice(0,10)||"9999-99-99", bd=String(b.due||"").slice(0,10)||"9999-99-99";
+      if(ad<bd) return -1; if(ad>bd) return 1;
+      return String(a.title||"").localeCompare(String(b.title||""));
+    });
+    overdue.sort(function(a,b){
+      var ad=String(a.due||"").slice(0,10), bd=String(b.due||"").slice(0,10);
+      return ad<bd?-1:(ad>bd?1:0);
+    });
+    return { today:today, overdue:overdue, overdueCount:overdue.length,
+      overdueCollapsed:overdue.length>threshold, threshold:threshold };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -736,7 +775,8 @@
     completedInTreeOnDay: completedInTreeOnDay,
     stripCcMarkers: stripCcMarkers,
     normalizeTodoistTask: normalizeTodoistTask,
-    todoistTileCounts: todoistTileCounts
+    todoistTileCounts: todoistTileCounts,
+    splitTodayPanel: splitTodayPanel
   };
 });
 /*__CC_DATA_END__*/
@@ -1077,6 +1117,9 @@
     quickAdd:TSERVER+"add-tasks",
     findProjects:TSERVER+"find-projects"
   };
+  var TODOIST_INBOX_URL="https://app.todoist.com/app/inbox";
+  // overdue-collapse threshold (G3, default 5; Chris may tune via localStorage)
+  function tdOverdueThreshold(){ var n; try{ n=parseInt(localStorage.getItem("cc_overdueThreshold"),10); }catch(e){} return (n>0)?n:5; }
   // reverse map: Todoist projectId -> CC area name, from State.todoistProjects (set in Task 1).
   function areaByProjectId(){
     var m={}, tp=(app.state&&app.state.todoistProjects)||{}, area;
@@ -1098,9 +1141,80 @@
     }
     app.todoistTasks=all;
     app.todoistTiles=CCData.todoistTileCounts(all);
+    app.todoistPanel=CCData.splitTodayPanel(all,{today:hstDate(),threshold:tdOverdueThreshold()});
     return app.todoistTiles;
   }
   try{ window.__ccLoadTodoist=loadTodoistTiles; }catch(e){}
+
+  // ---- 3d: Inbox chip — count of un-triaged Inbox tasks (read-only, deep-links to Todoist) ----
+  async function loadTodoistInbox(){
+    try{
+      var r=await call(TT.findTasks,{projectId:"inbox"});
+      var o=(r&&r.tasks)?r:(toObj(r)||{});
+      var list=(o&&o.tasks)||[];
+      app.todoistInbox=list.filter(function(t){return !t.checked;}).length;
+    }catch(e){ app.todoistInbox=null; DIAG.err=String((e&&e.message)||e); }
+    return app.todoistInbox;
+  }
+
+  // ---- 3b/3d render (read-only; no data-act so the global toggle handler never fires) ----
+  function tdRowHtml(t){
+    var today=hstDate(), due=String(t.due||"").slice(0,10);
+    var right=(due&&due<today)?'<span class="c-red">overdue · '+esc(prettyDate(due))+'</span>'
+      :(due===today)?'<span class="c-amber">today</span>'
+      :due?esc(prettyDate(due)):'open';
+    var star=t.priority?'<span class="ptog on" role="img" aria-label="priority" title="Priority">★</span> ':'';
+    var tag=t.area?'<span class="tag '+(AREA_TAG[t.area]||"cyan")+'">'+esc(t.area)+'</span>':'';
+    return '<div class="ti">'+
+      '<div class="chk" aria-hidden="true" style="visibility:hidden;"></div>'+
+      '<div class="name" style="grid-column:2;">'+star+esc(t.title)+'</div>'+
+      '<div class="right">'+right+'</div>'+
+      (tag?'<div class="tags">'+tag+'</div>':'')+'</div>';
+  }
+  function renderTodoistToday(){
+    var host=$("td-today-list"); if(!host) return;
+    var panel=app.todoistPanel;
+    if(!panel){ host.innerHTML='<div class="empty">Loading Todoist…</div>'; return; }
+    var rows=panel.today.length?panel.today.map(tdRowHtml).join(""):'<div class="empty">Nothing due today.</div>';
+    var over="";
+    if(panel.overdueCount){
+      if(panel.overdueCollapsed){
+        over='<div class="ti td-open-inbox" role="button" title="Open Todoist to triage" style="cursor:pointer;opacity:.9;">'+
+          '<div class="chk" aria-hidden="true" style="visibility:hidden;"></div>'+
+          '<div class="name" style="grid-column:2;"><span class="c-red">'+panel.overdueCount+' overdue</span> — open in Todoist to triage</div>'+
+          '<div class="right">›</div></div>';
+      }else{
+        over='<div class="section-label" style="padding:8px 14px 2px;">Overdue ('+panel.overdueCount+')</div>'+panel.overdue.map(tdRowHtml).join("");
+      }
+    }
+    host.innerHTML=rows+over;
+    var cc=$("td-today-count");
+    if(cc) cc.textContent=panel.today.length+" today · "+panel.overdueCount+" overdue";
+    var oi=host.querySelector(".td-open-inbox");
+    if(oi) oi.addEventListener("click",openTodoistInbox);
+  }
+  function renderInboxChip(){
+    var chip=$("td-inbox-chip"); if(!chip) return;
+    if(app.todoistInbox==null){ chip.style.display="none"; return; }
+    var n=app.todoistInbox;
+    chip.style.display="";
+    chip.textContent="Inbox "+n;
+    chip.title=n+" un-triaged Inbox task"+(n===1?"":"s")+" — open in Todoist";
+    chip.onclick=openTodoistInbox;
+  }
+  function openTodoistInbox(){ try{ window.open(TODOIST_INBOX_URL,"_blank","noopener"); }catch(e){} }
+
+  // ---- combined non-blocking loader, fired from boot()'s live success path (no cutover) ----
+  async function loadTodoist(){
+    renderTodoistToday();           // paint "Loading…" immediately
+    try{ await loadTodoistTiles(); }
+    catch(e){ app.todoistPanel={today:[],overdue:[],overdueCount:0,overdueCollapsed:false,threshold:tdOverdueThreshold()}; }
+    renderTodoistToday();
+    await loadTodoistInbox();
+    renderInboxChip();
+    return app.todoistTiles;
+  }
+  try{ window.__ccLoadTodoistPanels=loadTodoist; }catch(e){}
   // ---- render ----
   function steps(){return app.routines.filter(function(r){return r.when==="Morning";});}
   function renderSteps(){
@@ -1382,7 +1496,7 @@
     // Live path works two ways: Cowork bridge (ok===true) OR the Netlify notion-proxy (no bridge).
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
-    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):""));if(isResync)toast("Synced");}
+    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):""));if(isResync)toast("Synced");loadTodoist().catch(function(){});}
     catch(e){
       app.mode="snapshot";renderAll();
       var kind=CCData.classifySyncError(String((e&&e.message)||e)||DIAG.err);

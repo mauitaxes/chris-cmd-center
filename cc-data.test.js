@@ -546,3 +546,51 @@ test("todoistTileCounts: open / p1 / per-area / active areas (done excluded)", (
   assert.equal(c.areasActive, 2);
   assert.deepEqual(c.byArea, {"Finances":2,"Focus & Work":1});
 });
+
+// ---- Task 3b — Today panel split ----
+test("splitTodayPanel: buckets today vs overdue; priority & @today join today; done excluded", () => {
+  const tasks = [
+    {id:"a", title:"Due today",   due:"2026-06-08", priority:false, labels:[], done:false},
+    {id:"b", title:"Overdue",     due:"2026-06-01", priority:false, labels:[], done:false},
+    {id:"c", title:"P1 no due",   due:"",           priority:true,  labels:[], done:false},
+    {id:"d", title:"Labelled",    due:"",           priority:false, labels:["today"], done:false},
+    {id:"e", title:"Future plain",due:"2026-12-01", priority:false, labels:[], done:false},
+    {id:"f", title:"Done overdue",due:"2026-06-01", priority:false, labels:[], done:true},
+  ];
+  const r = C.splitTodayPanel(tasks, {today:"2026-06-08", threshold:5});
+  const todayIds = r.today.map(t=>t.id).sort();
+  assert.deepEqual(todayIds, ["a","c","d"]);   // future-plain & done excluded
+  assert.deepEqual(r.overdue.map(t=>t.id), ["b"]); // done-overdue excluded
+  assert.equal(r.overdueCount, 1);
+  assert.equal(r.overdueCollapsed, false);
+});
+test("splitTodayPanel: priority sorts first, then due date asc", () => {
+  const tasks = [
+    {id:"plain", title:"z", due:"2026-06-08", priority:false, labels:[], done:false},
+    {id:"p1late",title:"a", due:"2026-06-09", priority:true,  labels:[], done:false},
+    {id:"p1nodue", title:"a", due:"",           priority:true,  labels:[], done:false},
+  ];
+  const r = C.splitTodayPanel(tasks, {today:"2026-06-08"});
+  assert.equal(r.today[0].priority, true);     // a priority leads
+  assert.equal(r.today[r.today.length-1].id, "plain"); // non-priority last
+});
+test("splitTodayPanel: overdueCollapsed true past threshold", () => {
+  const tasks = [];
+  for (let i=0;i<7;i++) tasks.push({id:"o"+i, title:"x", due:"2026-06-0"+(i+1), priority:false, labels:[], done:false});
+  const r = C.splitTodayPanel(tasks, {today:"2026-06-08", threshold:5});
+  assert.equal(r.overdueCount, 7);
+  assert.equal(r.overdueCollapsed, true);
+});
+test("splitTodayPanel: datetime due compares on date prefix (MCP path)", () => {
+  const tasks = [{id:"dt", title:"x", due:"2026-06-08T08:00:00", priority:false, labels:[], done:false}];
+  const r = C.splitTodayPanel(tasks, {today:"2026-06-08"});
+  assert.deepEqual(r.today.map(t=>t.id), ["dt"]);
+  assert.equal(r.overdueCount, 0);
+});
+test("splitTodayPanel: empty / null inputs -> empty buckets, default threshold 5", () => {
+  const r = C.splitTodayPanel(null, {today:"2026-06-08"});
+  assert.deepEqual(r.today, []);
+  assert.deepEqual(r.overdue, []);
+  assert.equal(r.threshold, 5);
+  assert.equal(r.overdueCollapsed, false);
+});
