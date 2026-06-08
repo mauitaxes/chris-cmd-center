@@ -12,6 +12,16 @@
     findProjects:TSERVER+"find-projects"
   };
   var TODOIST_INBOX_URL="https://app.todoist.com/app/inbox";
+  // ---- 3c: Google Calendar (read-only Schedule lane). MCP-only path for now (Cowork populates;
+  // deployed site shows an empty state until a calendar-proxy is built — scope decided with Chris). ----
+  var CALSERVER="mcp__a8aed00c-e9c0-4e6d-8e3a-64452207f54f__";
+  var CAL={ listCalendars:CALSERVER+"list_calendars", listEvents:CALSERVER+"list_events" };
+  var CAL_DEFAULT_ALLOW=["mauitaxes@gmail.com"]; // primary only; Holidays calendar declined.
+  // allow-list lives in State (persisted once on first calendar load); falls back to the default.
+  function calendarAllowList(){
+    var a=app.state&&app.state.calendarAllowList;
+    return (Array.isArray(a)&&a.length)?a:CAL_DEFAULT_ALLOW;
+  }
   // overdue-collapse threshold (G3, default 5; Chris may tune via localStorage)
   function tdOverdueThreshold(){ var n; try{ n=parseInt(localStorage.getItem("cc_overdueThreshold"),10); }catch(e){} return (n>0)?n:5; }
   // reverse map: Todoist projectId -> CC area name, from State.todoistProjects (set in Task 1).
@@ -98,14 +108,83 @@
   }
   function openTodoistInbox(){ try{ window.open(TODOIST_INBOX_URL,"_blank","noopener"); }catch(e){} }
 
+  // ---- 3c calendar: normalize MCP event -> small shape; all-day uses start.date, timed uses start.dateTime ----
+  function normalizeCalEvent(raw, calendarId){
+    raw=raw||{}; var st=raw.start||{}, en=raw.end||{};
+    return {
+      id:String(raw.id||""),
+      start:String(st.dateTime||st.date||""),
+      end:String(en.dateTime||en.date||""),
+      title:String(raw.summary||"(busy)"),
+      allDay:!!(st.date && !st.dateTime),
+      calendarId:calendarId||"",
+      htmlLink:String(raw.htmlLink||"")
+    };
+  }
+  // Fetch today's events (HST window) for each allowed calendar, normalize, merge. Read-only; never
+  // touches app.tasks. Populates app.calendarEvents for the Schedule lane.
+  async function loadCalendar(){
+    var allow=calendarAllowList();
+    // persist the allow-list once so it survives reloads (do not re-prompt).
+    try{ if(app.state && !Array.isArray(app.state.calendarAllowList)){ await saveState({calendarAllowList:allow}); } }catch(e){}
+    var w=CCData.hstDayUtcWindow(hstDate())||{}; var arrays=[], i, j;
+    for(i=0;i<allow.length;i++){
+      try{
+        var r=await call(CAL.listEvents,{calendarId:allow[i],startTime:w.since,endTime:w.until,orderBy:"startTime",pageSize:50});
+        var o=(r&&r.events)?r:(toObj(r)||{});
+        var list=(o&&o.events)||[];
+        var norm=[];
+        for(j=0;j<list.length;j++){
+          if(list[j] && list[j].status==="cancelled") continue;
+          norm.push(normalizeCalEvent(list[j], allow[i]));
+        }
+        arrays.push(norm);
+      }catch(e){ DIAG.err=String((e&&e.message)||e); }
+    }
+    app.calendarEvents=CCData.mergeCalendarEvents(arrays);
+    return app.calendarEvents;
+  }
+  try{ window.__ccLoadCalendar=loadCalendar; }catch(e){}
+
+  // ---- 3c render (read-only; appointments are NOT deferrable: time + open-in-calendar link only) ----
+  function calTimeLabel(ev){
+    if(ev.allDay) return "all day";
+    var d=new Date(String(ev.start||""));
+    if(!isNaN(d.getTime())){
+      try{ return new Intl.DateTimeFormat("en-US",{timeZone:"Pacific/Honolulu",hour:"numeric",minute:"2-digit"}).format(d); }catch(e){}
+    }
+    var m=/T(\d{2}):(\d{2})/.exec(String(ev.start||"")); return m?(m[1]+":"+m[2]):"";
+  }
+  function calRowHtml(ev){
+    var link=ev.htmlLink
+      ? '<a class="right" href="'+esc(ev.htmlLink)+'" target="_blank" rel="noopener" title="Open in Google Calendar">open \u203A</a>'
+      : '<div class="right"></div>';
+    return '<div class="ti">'+
+      '<div class="chk" aria-hidden="true" style="visibility:hidden;"></div>'+
+      '<div class="name" style="grid-column:2;"><span class="c-amber">'+esc(calTimeLabel(ev))+'</span> &nbsp;'+esc(ev.title)+'</div>'+
+      link+'</div>';
+  }
+  function renderScheduleToday(){
+    var host=$("td-sched-list"); if(!host) return;
+    var evs=app.calendarEvents;
+    if(evs==null){ host.innerHTML='<div class="empty">Loading schedule\u2026</div>'; return; }
+    host.innerHTML=evs.length?evs.map(calRowHtml).join(""):'<div class="empty">No appointments today.</div>';
+    var cc=$("td-sched-count");
+    if(cc) cc.textContent=evs.length+(evs.length===1?" appt":" appts");
+  }
+
   // ---- combined non-blocking loader, fired from boot()'s live success path (no cutover) ----
-  async function loadTodoist(){
-    renderTodoistToday();           // paint "Loading…" immediately
+  async function loadTodoistAndCalendar(){
+    renderTodoistToday();           // paint "Loading\u2026" immediately
+    renderScheduleToday();
     try{ await loadTodoistTiles(); }
     catch(e){ app.todoistPanel={today:[],overdue:[],overdueCount:0,overdueCollapsed:false,threshold:tdOverdueThreshold()}; }
     renderTodoistToday();
     await loadTodoistInbox();
     renderInboxChip();
+    try{ await loadCalendar(); }
+    catch(e){ app.calendarEvents=[]; }
+    renderScheduleToday();
     return app.todoistTiles;
   }
-  try{ window.__ccLoadTodoistPanels=loadTodoist; }catch(e){}
+  try{ window.__ccLoadTodoistPanels=loadTodoistAndCalendar; }catch(e){}

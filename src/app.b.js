@@ -279,7 +279,7 @@
     // Live path works two ways: Cowork bridge (ok===true) OR the Netlify notion-proxy (no bridge).
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
-    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):""));if(isResync)toast("Synced");loadTodoist().catch(function(){});}
+    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):""));if(isResync)toast("Synced");loadTodoistAndCalendar().catch(function(){});}
     catch(e){
       app.mode="snapshot";renderAll();
       var kind=CCData.classifySyncError(String((e&&e.message)||e)||DIAG.err);

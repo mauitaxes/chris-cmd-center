@@ -350,6 +350,31 @@
       overdueCollapsed:overdue.length>threshold, threshold:threshold };
   }
 
+
+  // Merge normalized calendar events from N calendars into one time-ordered, de-duped list (pure, Task 3c).
+  // Input: array of arrays of {start,end,title,allDay,calendarId,htmlLink,id}. De-dupe so an appointment that
+  // appears in two calendars shows once (same start+title => same appointment); the first occurrence wins.
+  // All-day events (start "YYYY-MM-DD") sort before timed events the same day; unparseable starts sort last.
+  function mergeCalendarEvents(eventsArrays){
+    var seen={}, out=[];
+    (eventsArrays||[]).forEach(function(arr){
+      (arr||[]).forEach(function(e){
+        if(!e) return;
+        var key=String(e.start||"")+"\u0000"+String(e.title||"");
+        if(seen[key]) return;
+        seen[key]=1; out.push(e);
+      });
+    });
+    out.sort(function(a,b){
+      var ta=Date.parse(a.start), tb=Date.parse(b.start), na=isNaN(ta), nb=isNaN(tb);
+      if(na&&nb) return String(a.title||"").localeCompare(String(b.title||""));
+      if(na) return 1; if(nb) return -1;
+      if(ta!==tb) return ta-tb;
+      return String(a.title||"").localeCompare(String(b.title||""));
+    });
+    return out;
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -385,7 +410,8 @@
     stripCcMarkers: stripCcMarkers,
     normalizeTodoistTask: normalizeTodoistTask,
     todoistTileCounts: todoistTileCounts,
-    splitTodayPanel: splitTodayPanel
+    splitTodayPanel: splitTodayPanel,
+    mergeCalendarEvents: mergeCalendarEvents
   };
 });
 /*__CC_DATA_END__*/

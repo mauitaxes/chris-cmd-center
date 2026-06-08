@@ -594,3 +594,67 @@ test("splitTodayPanel: empty / null inputs -> empty buckets, default threshold 5
   assert.equal(r.threshold, 5);
   assert.equal(r.overdueCollapsed, false);
 });
+
+// ── Group: mergeCalendarEvents (Task 3c, read-only Schedule/Calendar lane) ──
+// Helper: a normalized calendar event with sensible defaults (the shape the fetch layer produces).
+const CEV = (o) => Object.assign({start:"",end:"",title:"",allDay:false,calendarId:"cal",htmlLink:""}, o);
+
+test("mergeCalendarEvents: flattens multiple calendar arrays into one list", () => {
+  const a = [CEV({id:"1", start:"2026-06-08T09:00:00-10:00", title:"A"})];
+  const b = [CEV({id:"2", start:"2026-06-08T11:00:00-10:00", title:"B"})];
+  const r = C.mergeCalendarEvents([a, b]);
+  assert.deepEqual(r.map(e=>e.title), ["A","B"]);
+});
+
+test("mergeCalendarEvents: orders by start time ascending", () => {
+  const a = [
+    CEV({start:"2026-06-08T14:00:00-10:00", title:"afternoon"}),
+    CEV({start:"2026-06-08T08:00:00-10:00", title:"morning"}),
+  ];
+  assert.deepEqual(C.mergeCalendarEvents([a]).map(e=>e.title), ["morning","afternoon"]);
+});
+
+test("mergeCalendarEvents: de-dupes an event present in two calendars (same start+title), keeps first", () => {
+  const primary = [CEV({id:"x", calendarId:"p", start:"2026-06-08T10:00:00-10:00", title:"Standup"})];
+  const work    = [CEV({id:"y", calendarId:"w", start:"2026-06-08T10:00:00-10:00", title:"Standup"})];
+  const r = C.mergeCalendarEvents([primary, work]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].calendarId, "p");
+});
+
+test("mergeCalendarEvents: all-day event sorts before timed events the same day", () => {
+  const a = [
+    CEV({start:"2026-06-08T08:00:00-10:00", title:"timed"}),
+    CEV({start:"2026-06-08", allDay:true, title:"holiday"}),
+  ];
+  assert.deepEqual(C.mergeCalendarEvents([a]).map(e=>e.title), ["holiday","timed"]);
+});
+
+test("mergeCalendarEvents: keeps distinct same-title events at different times", () => {
+  const a = [
+    CEV({start:"2026-06-08T09:00:00-10:00", title:"Call"}),
+    CEV({start:"2026-06-08T15:00:00-10:00", title:"Call"}),
+  ];
+  assert.equal(C.mergeCalendarEvents([a]).length, 2);
+});
+
+test("mergeCalendarEvents: empty / null / sparse inputs -> []", () => {
+  assert.deepEqual(C.mergeCalendarEvents(null), []);
+  assert.deepEqual(C.mergeCalendarEvents([]), []);
+  assert.deepEqual(C.mergeCalendarEvents([null, [], [undefined]]), []);
+});
+
+test("mergeCalendarEvents: unparseable start sorts to the end, does not throw", () => {
+  const a = [
+    CEV({start:"not-a-date", title:"junk"}),
+    CEV({start:"2026-06-08T08:00:00-10:00", title:"real"}),
+  ];
+  assert.deepEqual(C.mergeCalendarEvents([a]).map(e=>e.title), ["real","junk"]);
+});
+
+test("mergeCalendarEvents: does not mutate input arrays", () => {
+  const a = [CEV({start:"2026-06-08T14:00:00-10:00", title:"b"}), CEV({start:"2026-06-08T08:00:00-10:00", title:"a"})];
+  const snapshot = a.map(e=>e.title);
+  C.mergeCalendarEvents([a]);
+  assert.deepEqual(a.map(e=>e.title), snapshot);
+});
