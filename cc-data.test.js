@@ -508,3 +508,41 @@ test("completedInTreeOnDay: empty / null inputs -> []", () => {
   assert.deepEqual(C.completedInTreeOnDay(null, ["x"], "2026-06-08T10:00:00.000Z", "2026-06-09T10:00:00.000Z"), []);
   assert.deepEqual(C.completedInTreeOnDay([{eventType:"completed",parentProjectId:"x",eventDate:"2026-06-08T12:00:00Z"}], [], "2026-06-08T10:00:00.000Z", "2026-06-09T10:00:00.000Z"), []);
 });
+
+// ---- Task 3a — client task-tile transforms ----
+test("normalizeTodoistTask: MCP task shape -> dashboard model, strips ccid/created markers", () => {
+  const raw = { id:"6gqCXQ3qG6vRFVhW", content:"McCleary Estate Return",
+    description:"[created 2026-05-30] Need to inform Donna. [ccid:1739c150]",
+    dueDate:"2026-10-05", recurring:false, priority:"p1",
+    projectId:"6gqCVgmmffVVc4HW", labels:["today"], checked:false };
+  const out = C.normalizeTodoistTask(raw, {"6gqCVgmmffVVc4HW":"Focus & Work"});
+  assert.equal(out.id, raw.id);
+  assert.equal(out.title, "McCleary Estate Return");
+  assert.equal(out.area, "Focus & Work");
+  assert.equal(out.priority, true);
+  assert.equal(out.done, false);
+  assert.equal(out.due, "2026-10-05");
+  assert.equal(out.notes, "Need to inform Donna.");
+  assert.deepEqual(out.labels, ["today"]);
+});
+test("normalizeTodoistTask: unknown project -> area ''; p4 -> false; checked -> done; no markers", () => {
+  const out = C.normalizeTodoistTask({id:"x",content:"y",priority:"p4",projectId:"zzz",checked:true,description:"plain note"}, {});
+  assert.equal(out.area, "");
+  assert.equal(out.priority, false);
+  assert.equal(out.done, true);
+  assert.equal(out.notes, "plain note");
+  assert.equal(out.due, "");
+});
+test("todoistTileCounts: open / p1 / per-area / active areas (done excluded)", () => {
+  const tasks = [
+    {area:"Finances", priority:true, done:false},
+    {area:"Finances", priority:false, done:false},
+    {area:"Focus & Work", priority:true, done:true},
+    {area:"Focus & Work", priority:false, done:false},
+  ];
+  const c = C.todoistTileCounts(tasks);
+  assert.equal(c.open, 3);
+  assert.equal(c.p1, 1);
+  assert.equal(c.areasActive, 2);
+  assert.deepEqual(c.byArea, {"Finances":2,"Focus & Work":1});
+});

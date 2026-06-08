@@ -17,3 +17,21 @@
     for(area in tp){ if(tp[area]) m[tp[area]]=area; }
     return m;
   }
+  // Non-destructive Todoist read: fetch active CC-tree tasks per area, normalize, compute tiles.
+  // Does NOT mutate the Notion-backed app.tasks (no cutover) — fills app.todoistTasks/app.todoistTiles
+  // for the new read panels. Exposed as a smoke hook for live verification before any UI placement.
+  async function loadTodoistTiles(){
+    var map=areaByProjectId(), ids=Object.keys(map), all=[], i, j;
+    for(i=0;i<ids.length;i++){
+      try{
+        var r=await call(TT.findTasks,{projectId:ids[i]});
+        var o=(r&&r.tasks)?r:(toObj(r)||{});
+        var list=(o&&o.tasks)||[];
+        for(j=0;j<list.length;j++) all.push(CCData.normalizeTodoistTask(list[j], map));
+      }catch(e){ DIAG.err=String((e&&e.message)||e); }
+    }
+    app.todoistTasks=all;
+    app.todoistTiles=CCData.todoistTileCounts(all);
+    return app.todoistTiles;
+  }
+  try{ window.__ccLoadTodoist=loadTodoistTiles; }catch(e){}

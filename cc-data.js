@@ -285,6 +285,42 @@
     });
   }
 
+  // strip migration markers ([created YYYY-MM-DD] prefix, [ccid:hash] suffix) from a Todoist description (pure)
+  function stripCcMarkers(s){
+    return String(s||"")
+      .replace(/\[created\s+\d{4}-\d{2}-\d{2}\]\s*/g,"")
+      .replace(/\s*\[ccid:[0-9a-f]{8}\]/g,"")
+      .trim();
+  }
+  // Todoist (MCP/proxy) task shape -> the dashboard's app.tasks model so existing render reuses (pure)
+  function normalizeTodoistTask(raw, areaByProjectId){
+    raw=raw||{}; areaByProjectId=areaByProjectId||{};
+    return {
+      id:String(raw.id||""),
+      title:String(raw.content||""),
+      area:areaByProjectId[raw.projectId]||"",
+      priority:raw.priority==="p1",
+      done:!!raw.checked,
+      due:raw.dueDate||"",
+      labels:Array.isArray(raw.labels)?raw.labels:[],
+      recurring:!!raw.recurring,
+      notes:stripCcMarkers(raw.description)
+    };
+  }
+  // dashboard tile numbers from normalized tasks: open count, p1 count, per-area, active-area count (pure)
+  function todoistTileCounts(tasks){
+    tasks=tasks||[];
+    var open=0,p1=0,byArea={},areas={};
+    tasks.forEach(function(t){
+      if(t.done) return;
+      open++;
+      if(t.priority) p1++;
+      var a=t.area||"(none)";
+      byArea[a]=(byArea[a]||0)+1; areas[a]=1;
+    });
+    return { open:open, p1:p1, areasActive:Object.keys(areas).length, byArea:byArea };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -316,7 +352,10 @@
     notionCaptureToTodoist: notionCaptureToTodoist,
     reconcileCounts: reconcileCounts,
     hstDayUtcWindow: hstDayUtcWindow,
-    completedInTreeOnDay: completedInTreeOnDay
+    completedInTreeOnDay: completedInTreeOnDay,
+    stripCcMarkers: stripCcMarkers,
+    normalizeTodoistTask: normalizeTodoistTask,
+    todoistTileCounts: todoistTileCounts
   };
 });
 /*__CC_DATA_END__*/
