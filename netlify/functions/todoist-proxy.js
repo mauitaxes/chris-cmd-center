@@ -3,7 +3,7 @@
 // Mirrors notion-proxy.js: exported pure helpers + dispatch({name,args,fetchImpl}) + handler.
 // READS only for now (Task 3): find-tasks, find-activity, find-projects. Writes = Task 5.
 
-const REST_BASE = "https://api.todoist.com/rest/v2";  // confirm on first deploy-smoke (v1 unified is rolling out)
+const REST_BASE = "https://api.todoist.com/api/v1";  // unified v1 (REST v2 retired 2025 -> 410 Gone); paginated {results:[]} handled below
 const SYNC_BASE = "https://api.todoist.com/sync/v9";
 
 // ---- pure helpers (exported for tests) ----

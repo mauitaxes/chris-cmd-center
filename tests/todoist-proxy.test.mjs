@@ -73,11 +73,11 @@ test("normalizeActivityEvent maps sync event -> MCP event shape (incl. isRecurri
 // ---- dispatch (injected fetch) ----
 test("dispatch find-tasks: GETs /tasks?project_id with Bearer auth, returns {tasks}", async () => {
   const fetchImpl = mockFetch([
-    { match: (u) => u.includes("/rest/v2/tasks"),
-      respond: () => ({ body: [
+    { match: (u) => u.includes("/api/v1/tasks"),
+      respond: () => ({ body: { results: [
         { id: 1, content: "A", priority: 4, project_id: 6789, due: { date: "2026-06-10" }, is_completed: false, labels: [] },
         { id: 2, content: "B", priority: 1, project_id: 6789, is_completed: false, labels: [] },
-      ] }) },
+      ] } }) },
   ]);
   const r = await dispatch({ name: FULL("find-tasks"), args: { projectId: "6789" }, fetchImpl });
   assert.equal(r.tasks.length, 2);
