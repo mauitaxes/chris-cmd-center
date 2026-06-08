@@ -398,3 +398,27 @@ test("mergeResolvedDatabases: adds resolved ids, never overwrites existing", () 
 test("mergeResolvedDatabases: null inputs -> empty object", () => {
   assert.deepEqual(C.mergeResolvedDatabases(null, null), {});
 });
+
+// ── Task 1: Todoist structure spec + State-payload builder ──────────────────
+test("ccTodoistSpec: parent + 7 areas + full label set", () => {
+  const s = C.ccTodoistSpec();
+  assert.equal(s.parent, "Command Center");
+  assert.deepEqual(s.areas, ["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"]);
+  assert.deepEqual(s.labels, ["today","energy-low","energy-med","energy-high","5m","15m","30m","1h","2h"]);
+});
+test("buildTodoistStatePayload: maps areas+labels to id dicts", () => {
+  const payload = C.buildTodoistStatePayload(
+    "PARENT",
+    [{name:"Finances",id:"p-fin"},{name:"Focus & Work",id:"p-foc"}],
+    [{name:"today",id:"l-today"},{name:"5m",id:"l-5m"}]
+  );
+  assert.equal(payload.todoistParentId, "PARENT");
+  assert.deepEqual(payload.todoistProjects, {"Finances":"p-fin","Focus & Work":"p-foc"});
+  assert.deepEqual(payload.todoistLabels, {"today":"l-today","5m":"l-5m"});
+});
+test("buildTodoistStatePayload: null inputs -> empty dicts", () => {
+  const payload = C.buildTodoistStatePayload(null, null, null);
+  assert.equal(payload.todoistParentId, "");
+  assert.deepEqual(payload.todoistProjects, {});
+  assert.deepEqual(payload.todoistLabels, {});
+});

@@ -202,6 +202,22 @@
     return out;
   }
 
+  // -- Task 1: Todoist structure spec + State-payload builder (pure) --
+  function ccTodoistSpec(){
+    return {
+      parent:"Command Center",
+      areas:["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"],
+      labels:["today","energy-low","energy-med","energy-high","5m","15m","30m","1h","2h"]
+    };
+  }
+  // map created area-projects + labels (each {name,id}) to State id dicts (pure)
+  function buildTodoistStatePayload(parentId, areaProjects, labels){
+    var projects={}, labelMap={};
+    (areaProjects||[]).forEach(function(p){ if(p&&p.name) projects[p.name]=p.id; });
+    (labels||[]).forEach(function(l){ if(l&&l.name) labelMap[l.name]=l.id; });
+    return { todoistParentId:parentId||"", todoistProjects:projects, todoistLabels:labelMap };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -225,7 +241,9 @@
     dailyReportText: dailyReportText,
     classifySyncError: classifySyncError,
     missingDbKeys: missingDbKeys,
-    mergeResolvedDatabases: mergeResolvedDatabases
+    mergeResolvedDatabases: mergeResolvedDatabases,
+    ccTodoistSpec: ccTodoistSpec,
+    buildTodoistStatePayload: buildTodoistStatePayload
   };
 });
 /*__CC_DATA_END__*/
