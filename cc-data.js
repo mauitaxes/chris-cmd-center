@@ -263,6 +263,28 @@
     return { ok:allOk, rows:rows };
   }
 
+  // HST (UTC-10, no DST) local day -> [since,until) UTC window for completed-by-completion queries (pure, D10)
+  function hstDayUtcWindow(localDate){
+    var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(localDate||""));
+    if(!m) return null;
+    var sinceMs=Date.UTC(+m[1], +m[2]-1, +m[3], 10, 0, 0, 0); // local midnight HST = 10:00Z
+    var untilMs=sinceMs + 24*60*60*1000;
+    return { since:new Date(sinceMs).toISOString(), until:new Date(untilMs).toISOString() };
+  }
+  // filter Todoist activity-log "completed" events to a project-id set within a UTC [since,until) window (pure).
+  // Source of truth for the streak/progress "completed today" signal: recurring completions appear HERE
+  // (with extraData.isRecurring) but NOT in find-completed-tasks (CP3 spike, 2026-06-08).
+  function completedInTreeOnDay(events, treeProjectIds, sinceUtcISO, untilUtcISO){
+    var set={}; (treeProjectIds||[]).forEach(function(id){ if(id) set[id]=1; });
+    var since=Date.parse(sinceUtcISO), until=Date.parse(untilUtcISO);
+    return (events||[]).filter(function(e){
+      if(!e || e.eventType!=="completed") return false;
+      if(!set[e.parentProjectId]) return false;
+      var t=Date.parse(e.eventDate);
+      return t>=since && t<until;
+    });
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -292,7 +314,9 @@
     migrationIdKey: migrationIdKey,
     notionTaskToTodoist: notionTaskToTodoist,
     notionCaptureToTodoist: notionCaptureToTodoist,
-    reconcileCounts: reconcileCounts
+    reconcileCounts: reconcileCounts,
+    hstDayUtcWindow: hstDayUtcWindow,
+    completedInTreeOnDay: completedInTreeOnDay
   };
 });
 /*__CC_DATA_END__*/

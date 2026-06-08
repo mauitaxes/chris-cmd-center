@@ -475,3 +475,36 @@ test("reconcileCounts: mismatch flags the row and overall", () => {
   assert.equal(r.rows[0].actual, 3);
   assert.equal(r.rows[0].ok, false);
 });
+
+// ---- Task 4 / CP3 recurring-completion spike helpers ----
+test("hstDayUtcWindow: HST (UTC-10) local day -> [10:00Z, next 10:00Z) window", () => {
+  const w = C.hstDayUtcWindow("2026-06-08");
+  assert.equal(w.since, "2026-06-08T10:00:00.000Z");
+  assert.equal(w.until, "2026-06-09T10:00:00.000Z");
+});
+test("hstDayUtcWindow: invalid input -> null", () => {
+  assert.equal(C.hstDayUtcWindow("nope"), null);
+  assert.equal(C.hstDayUtcWindow(""), null);
+});
+test("completedInTreeOnDay: keeps in-tree completed events inside the window (recurring incl.)", () => {
+  const w = C.hstDayUtcWindow("2026-06-08");
+  const events = [
+    // recurring spike completion, in CC Daily Routines, at 19:58Z on 2026-06-08 (real spike shape)
+    { eventType:"completed", parentProjectId:"6gqCVgp6xQ44R2V3", eventDate:"2026-06-08T19:58:53.903Z",
+      extraData:{ isRecurring:true, content:"SPIKE" } },
+    // completed but OUTSIDE the CC tree (onboarding project) -> excluded by tree filter
+    { eventType:"completed", parentProjectId:"6gq77cCq8P4J7vHm", eventDate:"2026-06-08T18:41:28.099Z" },
+    // in-tree but wrong event type -> excluded
+    { eventType:"added", parentProjectId:"6gqCVgp6xQ44R2V3", eventDate:"2026-06-08T12:00:00.000Z" },
+    // in-tree completed but BEFORE the window (previous HST day) -> excluded
+    { eventType:"completed", parentProjectId:"6gqCVgp6xQ44R2V3", eventDate:"2026-06-08T09:59:00.000Z" }
+  ];
+  const treeIds = ["6gqCVgp6xQ44R2V3","6gqCVgmmffVVc4HW","6gqCVgmmg96jc96q"];
+  const hit = C.completedInTreeOnDay(events, treeIds, w.since, w.until);
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0].extraData.content, "SPIKE");
+});
+test("completedInTreeOnDay: empty / null inputs -> []", () => {
+  assert.deepEqual(C.completedInTreeOnDay(null, ["x"], "2026-06-08T10:00:00.000Z", "2026-06-09T10:00:00.000Z"), []);
+  assert.deepEqual(C.completedInTreeOnDay([{eventType:"completed",parentProjectId:"x",eventDate:"2026-06-08T12:00:00Z"}], [], "2026-06-08T10:00:00.000Z", "2026-06-09T10:00:00.000Z"), []);
+});
