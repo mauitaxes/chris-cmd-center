@@ -807,10 +807,12 @@
   var DIAG={last:null,name:"",err:""};
   function hasBridge(){return !!(window.cowork&&typeof window.cowork.callMcpTool==="function");}
   var PROXY_URL="/.netlify/functions/notion-proxy";
+  var TODOIST_PROXY_URL="/.netlify/functions/todoist-proxy";
+  function proxyUrlFor(name){return (name&&name.indexOf("b9779bcc-3581-4f0e-bef4-401bb840378a")>=0)?TODOIST_PROXY_URL:PROXY_URL;}
   async function call(name,args){
     if(!hasBridge()){
       try{
-        var resp=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
+        var resp=await fetch(proxyUrlFor(name),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
         if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}throw new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));}
         var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return j;
       }catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
@@ -1026,15 +1028,22 @@
   // ---- app.c.js : Todoist (+Calendar) read/write browser logic (Task 3+) ----
   // Concatenated between app.a.js and app.b.js inside the shared IIFE (build order a -> c -> b),
   // so these definitions exist before app.b.js wire()/boot() run. Keeps each build input < 40KB.
-  var TODOIST_PROXY_URL="/.netlify/functions/todoist-proxy";
-  // Todoist tool-name map (mirrors `T` for Notion). Browser -> todoist-proxy; Cowork -> MCP.
+  // Todoist MCP server prefix. call() passes the FULL name through: Cowork -> callMcpTool;
+  // deployed browser -> todoist-proxy (call() routes by this uuid). suffix() in the proxy strips it.
+  var TSERVER="mcp__b9779bcc-3581-4f0e-bef4-401bb840378a__";
   var TT={
-    findTasks:"todoist-find-tasks",
-    findActivity:"todoist-find-activity",
-    complete:"todoist-complete-tasks",
-    quickAdd:"todoist-add-tasks",
-    findProjects:"todoist-find-projects"
+    findTasks:TSERVER+"find-tasks",
+    findActivity:TSERVER+"find-activity",
+    complete:TSERVER+"complete-tasks",
+    quickAdd:TSERVER+"add-tasks",
+    findProjects:TSERVER+"find-projects"
   };
+  // reverse map: Todoist projectId -> CC area name, from State.todoistProjects (set in Task 1).
+  function areaByProjectId(){
+    var m={}, tp=(app.state&&app.state.todoistProjects)||{}, area;
+    for(area in tp){ if(tp[area]) m[tp[area]]=area; }
+    return m;
+  }
   // ---- render ----
   function steps(){return app.routines.filter(function(r){return r.when==="Morning";});}
   function renderSteps(){

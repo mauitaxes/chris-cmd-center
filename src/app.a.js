@@ -104,10 +104,12 @@
   var DIAG={last:null,name:"",err:""};
   function hasBridge(){return !!(window.cowork&&typeof window.cowork.callMcpTool==="function");}
   var PROXY_URL="/.netlify/functions/notion-proxy";
+  var TODOIST_PROXY_URL="/.netlify/functions/todoist-proxy";
+  function proxyUrlFor(name){return (name&&name.indexOf("b9779bcc-3581-4f0e-bef4-401bb840378a")>=0)?TODOIST_PROXY_URL:PROXY_URL;}
   async function call(name,args){
     if(!hasBridge()){
       try{
-        var resp=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
+        var resp=await fetch(proxyUrlFor(name),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
         if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}throw new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));}
         var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return j;
       }catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
