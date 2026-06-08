@@ -583,6 +583,89 @@
     return out;
   }
 
+  // -- Task 1: Todoist structure spec + State-payload builder (pure) --
+  function ccTodoistSpec(){
+    return {
+      parent:"Command Center",
+      areas:["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"],
+      labels:["today","energy-low","energy-med","energy-high","5m","15m","30m","1h","2h"]
+    };
+  }
+  // map created area-projects + labels (each {name,id}) to State id dicts (pure)
+  function buildTodoistStatePayload(parentId, areaProjects, labels){
+    var projects={}, labelMap={};
+    (areaProjects||[]).forEach(function(p){ if(p&&p.name) projects[p.name]=p.id; });
+    (labels||[]).forEach(function(l){ if(l&&l.name) labelMap[l.name]=l.id; });
+    return { todoistParentId:parentId||"", todoistProjects:projects, todoistLabels:labelMap };
+  }
+
+  // -- Task 2: pure migration transforms --
+  // deterministic 8-char FNV-1a hash of a notion page id (no deps)
+  function migrationIdKey(pageId){
+    var s=String(pageId||""), h=0x811c9dc5;
+    for(var i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0; }
+    return ("0000000"+h.toString(16)).slice(-8);
+  }
+  // map a Notion task object -> Todoist add-tasks payload + [ccid] marker (pure)
+  function notionTaskToTodoist(task, opts){
+    task=task||{}; opts=opts||{};
+    var projectId=(opts.projectByArea&&task.area&&opts.projectByArea[task.area])||opts.parentId||"";
+    var labels=[];
+    var el=opts.energyLabelMap&&task.energy&&opts.energyLabelMap[task.energy]; if(el) labels.push(el);
+    var tl=opts.timeLabelMap&&task.time&&opts.timeLabelMap[task.time]; if(tl) labels.push(tl);
+    var marker="[ccid:"+migrationIdKey(task.id)+"]";
+    var notes=String(task.notes||"");
+    var created=task.created?("[created "+String(task.created).slice(0,10)+"] "):"";
+    var description=(created+notes).trim();
+    description=(description?description+" ":"")+marker;
+    var out={ content:String(task.title||"(task)"), projectId:projectId,
+              priority:task.priority?"p1":"p4", labels:labels, description:description };
+    if(task.due) out.dueString=String(task.due).slice(0,10);
+    return out;
+  }
+  // map a Notion capture object -> Todoist inbox payload + [ccid] marker (pure)
+  function notionCaptureToTodoist(cap){
+    cap=cap||{};
+    var marker="[ccid:"+migrationIdKey(cap.id)+"]";
+    var notes=String(cap.notes||"");
+    var description=(notes?notes+" ":"")+marker;
+    return { content:String(cap.item||"(note)"), projectId:"inbox", description:description };
+  }
+  // compare expected vs actual count maps -> per-row + overall reconciliation (pure)
+  function reconcileCounts(expected, actual){
+    expected=expected||{}; actual=actual||{};
+    var keys={}, k; for(k in expected) keys[k]=1; for(k in actual) keys[k]=1;
+    var rows=[], allOk=true;
+    Object.keys(keys).forEach(function(key){
+      var e=+expected[key]||0, a=+actual[key]||0, ok=(e===a);
+      if(!ok) allOk=false;
+      rows.push({key:key, expected:e, actual:a, ok:ok});
+    });
+    return { ok:allOk, rows:rows };
+  }
+
+  // HST (UTC-10, no DST) local day -> [since,until) UTC window for completed-by-completion queries (pure, D10)
+  function hstDayUtcWindow(localDate){
+    var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(localDate||""));
+    if(!m) return null;
+    var sinceMs=Date.UTC(+m[1], +m[2]-1, +m[3], 10, 0, 0, 0); // local midnight HST = 10:00Z
+    var untilMs=sinceMs + 24*60*60*1000;
+    return { since:new Date(sinceMs).toISOString(), until:new Date(untilMs).toISOString() };
+  }
+  // filter Todoist activity-log "completed" events to a project-id set within a UTC [since,until) window (pure).
+  // Source of truth for the streak/progress "completed today" signal: recurring completions appear HERE
+  // (with extraData.isRecurring) but NOT in find-completed-tasks (CP3 spike, 2026-06-08).
+  function completedInTreeOnDay(events, treeProjectIds, sinceUtcISO, untilUtcISO){
+    var set={}; (treeProjectIds||[]).forEach(function(id){ if(id) set[id]=1; });
+    var since=Date.parse(sinceUtcISO), until=Date.parse(untilUtcISO);
+    return (events||[]).filter(function(e){
+      if(!e || e.eventType!=="completed") return false;
+      if(!set[e.parentProjectId]) return false;
+      var t=Date.parse(e.eventDate);
+      return t>=since && t<until;
+    });
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -606,7 +689,15 @@
     dailyReportText: dailyReportText,
     classifySyncError: classifySyncError,
     missingDbKeys: missingDbKeys,
-    mergeResolvedDatabases: mergeResolvedDatabases
+    mergeResolvedDatabases: mergeResolvedDatabases,
+    ccTodoistSpec: ccTodoistSpec,
+    buildTodoistStatePayload: buildTodoistStatePayload,
+    migrationIdKey: migrationIdKey,
+    notionTaskToTodoist: notionTaskToTodoist,
+    notionCaptureToTodoist: notionCaptureToTodoist,
+    reconcileCounts: reconcileCounts,
+    hstDayUtcWindow: hstDayUtcWindow,
+    completedInTreeOnDay: completedInTreeOnDay
   };
 });
 /*__CC_DATA_END__*/
@@ -932,6 +1023,18 @@
     if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.focusSessions},pages:[{properties:{Session:"Focus "+min+"m "+todayHST(),"date:Date:start":todayHST(),Minutes:min,Type:"Focus"}}]});await saveState({focusMinutesToday:fm});lsRemove({t:"focus",min:min});}catch(e){noteQueued();}}
   }
 
+  // ---- app.c.js : Todoist (+Calendar) read/write browser logic (Task 3+) ----
+  // Concatenated between app.a.js and app.b.js inside the shared IIFE (build order a -> c -> b),
+  // so these definitions exist before app.b.js wire()/boot() run. Keeps each build input < 40KB.
+  var TODOIST_PROXY_URL="/.netlify/functions/todoist-proxy";
+  // Todoist tool-name map (mirrors `T` for Notion). Browser -> todoist-proxy; Cowork -> MCP.
+  var TT={
+    findTasks:"todoist-find-tasks",
+    findActivity:"todoist-find-activity",
+    complete:"todoist-complete-tasks",
+    quickAdd:"todoist-add-tasks",
+    findProjects:"todoist-find-projects"
+  };
   // ---- render ----
   function steps(){return app.routines.filter(function(r){return r.when==="Morning";});}
   function renderSteps(){
