@@ -218,6 +218,51 @@
     return { todoistParentId:parentId||"", todoistProjects:projects, todoistLabels:labelMap };
   }
 
+  // -- Task 2: pure migration transforms --
+  // deterministic 8-char FNV-1a hash of a notion page id (no deps)
+  function migrationIdKey(pageId){
+    var s=String(pageId||""), h=0x811c9dc5;
+    for(var i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0; }
+    return ("0000000"+h.toString(16)).slice(-8);
+  }
+  // map a Notion task object -> Todoist add-tasks payload + [ccid] marker (pure)
+  function notionTaskToTodoist(task, opts){
+    task=task||{}; opts=opts||{};
+    var projectId=(opts.projectByArea&&task.area&&opts.projectByArea[task.area])||opts.parentId||"";
+    var labels=[];
+    var el=opts.energyLabelMap&&task.energy&&opts.energyLabelMap[task.energy]; if(el) labels.push(el);
+    var tl=opts.timeLabelMap&&task.time&&opts.timeLabelMap[task.time]; if(tl) labels.push(tl);
+    var marker="[ccid:"+migrationIdKey(task.id)+"]";
+    var notes=String(task.notes||"");
+    var created=task.created?("[created "+String(task.created).slice(0,10)+"] "):"";
+    var description=(created+notes).trim();
+    description=(description?description+" ":"")+marker;
+    var out={ content:String(task.title||"(task)"), projectId:projectId,
+              priority:task.priority?"p1":"p4", labels:labels, description:description };
+    if(task.due) out.dueString=String(task.due).slice(0,10);
+    return out;
+  }
+  // map a Notion capture object -> Todoist inbox payload + [ccid] marker (pure)
+  function notionCaptureToTodoist(cap){
+    cap=cap||{};
+    var marker="[ccid:"+migrationIdKey(cap.id)+"]";
+    var notes=String(cap.notes||"");
+    var description=(notes?notes+" ":"")+marker;
+    return { content:String(cap.item||"(note)"), projectId:"inbox", description:description };
+  }
+  // compare expected vs actual count maps -> per-row + overall reconciliation (pure)
+  function reconcileCounts(expected, actual){
+    expected=expected||{}; actual=actual||{};
+    var keys={}, k; for(k in expected) keys[k]=1; for(k in actual) keys[k]=1;
+    var rows=[], allOk=true;
+    Object.keys(keys).forEach(function(key){
+      var e=+expected[key]||0, a=+actual[key]||0, ok=(e===a);
+      if(!ok) allOk=false;
+      rows.push({key:key, expected:e, actual:a, ok:ok});
+    });
+    return { ok:allOk, rows:rows };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -243,7 +288,11 @@
     missingDbKeys: missingDbKeys,
     mergeResolvedDatabases: mergeResolvedDatabases,
     ccTodoistSpec: ccTodoistSpec,
-    buildTodoistStatePayload: buildTodoistStatePayload
+    buildTodoistStatePayload: buildTodoistStatePayload,
+    migrationIdKey: migrationIdKey,
+    notionTaskToTodoist: notionTaskToTodoist,
+    notionCaptureToTodoist: notionCaptureToTodoist,
+    reconcileCounts: reconcileCounts
   };
 });
 /*__CC_DATA_END__*/

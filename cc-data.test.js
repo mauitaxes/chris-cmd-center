@@ -422,3 +422,56 @@ test("buildTodoistStatePayload: null inputs -> empty dicts", () => {
   assert.deepEqual(payload.todoistProjects, {});
   assert.deepEqual(payload.todoistLabels, {});
 });
+
+// ── Task 2: pure migration transforms ──────────────────────────────────────
+test("migrationIdKey: deterministic 8-char hash of a notion page id", () => {
+  const a = C.migrationIdKey("27268b77-7a95-4cd0-a94c-82bb12188b9a");
+  const b = C.migrationIdKey("27268b77-7a95-4cd0-a94c-82bb12188b9a");
+  assert.equal(a, b);
+  assert.match(a, /^[0-9a-f]{8}$/);
+  assert.notEqual(a, C.migrationIdKey("different-id"));
+});
+test("notionTaskToTodoist: maps area/priority/labels/due/notes + ccid marker", () => {
+  const task = { id:"PAGE1", title:"Pay GET tax", area:"Finances",
+                 priority:true, due:"2026-06-10", energy:"med", time:"30m", notes:"quarterly" };
+  const out = C.notionTaskToTodoist(task, {
+    parentId:"PARENT",
+    projectByArea:{"Finances":"p-fin"},
+    energyLabelMap:{low:"energy-low",med:"energy-med",high:"energy-high"},
+    timeLabelMap:{"5m":"5m","15m":"15m","30m":"30m","1h":"1h","2h":"2h"}
+  });
+  assert.equal(out.content, "Pay GET tax");
+  assert.equal(out.projectId, "p-fin");
+  assert.equal(out.priority, "p1");
+  assert.deepEqual(out.labels.sort(), ["energy-med","30m"].sort());
+  assert.equal(out.dueString, "2026-06-10");
+  assert.ok(out.description.includes("quarterly"));
+  assert.match(out.description, /\[ccid:[0-9a-f]{8}\]/);
+});
+test("notionTaskToTodoist: no area -> parent project, no priority -> p4", () => {
+  const out = C.notionTaskToTodoist({id:"P2",title:"x",area:"",priority:false}, {parentId:"PARENT",projectByArea:{}});
+  assert.equal(out.projectId, "PARENT");
+  assert.equal(out.priority, "p4");
+  assert.deepEqual(out.labels, []);
+});
+test("notionCaptureToTodoist: inbox + marker", () => {
+  const out = C.notionCaptureToTodoist({id:"CAP1",item:"call plumber",notes:""});
+  assert.equal(out.projectId, "inbox");
+  assert.equal(out.content, "call plumber");
+  assert.match(out.description, /\[ccid:[0-9a-f]{8}\]/);
+});
+test("reconcileCounts: per-key match + overall ok", () => {
+  const r = C.reconcileCounts(
+    {"Finances":3,"Focus & Work":5,"P1":2,"Inbox":4},
+    {"Finances":3,"Focus & Work":5,"P1":2,"Inbox":4}
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.rows.find(x=>x.key==="Finances").ok, true);
+});
+test("reconcileCounts: mismatch flags the row and overall", () => {
+  const r = C.reconcileCounts({"Inbox":4}, {"Inbox":3});
+  assert.equal(r.ok, false);
+  assert.equal(r.rows[0].expected, 4);
+  assert.equal(r.rows[0].actual, 3);
+  assert.equal(r.rows[0].ok, false);
+});
