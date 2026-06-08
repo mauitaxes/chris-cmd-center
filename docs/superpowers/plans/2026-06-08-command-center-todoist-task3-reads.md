@@ -51,9 +51,10 @@
 ## 3d — Inbox chip [wiring]
 - [ ] `call(TT.findTasks,{projectId:"inbox"})` count → small triage chip; click deep-links to Todoist Inbox. (Note: Inbox holds 1 pre-existing non-ccid task + future captures.)
 
-## 3c — Schedule lane (Google Calendar, read-only) [wiring; **G2**]
-- [ ] Enumerate `list_calendars`; Chris picks allow-list (multiSelect). Persist chosen IDs to State (`calendarAllowList[]`).
-- [ ] `list_events` (today, HST window) for each allowed calendar → merge, time-order, dedupe. Pure `mergeCalendarEvents(eventsArrays)` TDD'd (no double-show). Appointments are NOT deferrable — row shows "open in calendar".
+## 3c — Schedule lane (Google Calendar, read-only) [wiring; **G2**] — DONE (commit `dc904e4`)
+- [x] Enumerate `list_calendars`; allow-list decided = `["mauitaxes@gmail.com"]` (primary only; Holidays declined). Persisted to State `calendarAllowList[]`, read back on boot, not re-prompted.
+- [x] `list_events` (today, HST window via `hstDayUtcWindow`) per allowed calendar → normalize `{start,end,title,allDay,calendarId,htmlLink}` (all-day uses `start.date`, timed uses `start.dateTime`; `status:"cancelled"` filtered) → `CCData.mergeCalendarEvents(eventsArrays)` (pure, TDD'd, 8 tests: time-ordered, de-duped across calendars, all-day-first, unparseable-last). Read-only "Schedule · Today" card; appointments NOT deferrable — row shows time + "open in calendar" (`htmlLink`). 135/135 green; build clean.
+- **Scope decision (2026-06-08, Chris):** ship **MCP-only**. Lane populates via the Google Calendar MCP in Cowork; deployed Netlify site shows a graceful empty state (no calendar proxy yet). The deployed path is tracked as **Task 3c-proxy (deferred)** in the phase-1 plan roadmap — build `netlify/functions/calendar-proxy.js` (Google OAuth, injectable-`fetchImpl`, mirror todoist-proxy) when the deployed calendar lane is wanted.
 
 ## 3e — Today's Progress [stub until Task 7]
 - Numerator = `completedInTreeOnDay(activityEvents, areaIds, since, until)` (already built, CP3). Denominator = frozen `plannedToday[]` snapshot — **owned by Task 7 nightly job**. Until then: stub denominator (e.g., current open+done count) behind a `progressDenominatorReady` flag; bar may exceed 100% by design; never retreats. Mark blocked-on-7.
