@@ -2,7 +2,7 @@
   var SERVER="mcp__b47f7667-3cb0-4d8e-bbaf-fa1fca4c39c7__";
   var T={fetch:SERVER+"notion-fetch",search:SERVER+"notion-search",update:SERVER+"notion-update-page",create:SERVER+"notion-create-pages"};
   var STATE_PAGE="37478f3d-415b-814c-8c65-dd76b6ab9aa3";
-  var DBS={tasks:"fb432308-59b9-4078-92db-a83c6279957d",wins:"f99a9128-9809-48b9-9cb6-870717bd5183",routines:"17f7f036-e24c-40ce-9d41-db5d8a66b618",capture:"35ba4e31-eca6-4ab7-8625-acc41d5341e8",focusSessions:"291cb585-746e-4195-a920-b0ac460fbbf6"};
+  var DBS={tasks:"fb432308-59b9-4078-92db-a83c6279957d",wins:"f99a9128-9809-48b9-9cb6-870717bd5183",routines:"17f7f036-e24c-40ce-9d41-db5d8a66b618",capture:"35ba4e31-eca6-4ab7-8625-acc41d5341e8",focusSessions:"291cb585-746e-4195-a920-b0ac460fbbf6",dailyLog:"5c892f50-2d01-4731-9b04-ed3ac02defcf"};
   var AREA_TAG={"Focus & Work":"purple","Daily Routines":"green","Health & Sleep":"amber","Finances":"yellow","Home & Space":"blue","Relationships":"red","Claude Tasks":"cyan"};
   var AREAS=["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"];
 
@@ -176,7 +176,16 @@
     var m=t.match(/```json\s*([\s\S]*?)```/);var js=m?m[1].trim():null;
     if(!js){var m2=t.match(/\{[\s\S]*"taskIds"[\s\S]*?\}/);if(m2)js=m2[0].trim();}
     var obj=null;if(js){try{obj=JSON.parse(js);}catch(e){}}
-    if(obj){app.state=obj;app.stateJson=js;if(obj.databases){for(var k in obj.databases)DBS[k]=obj.databases[k];}}
+    if(obj){
+      app.state=obj;app.stateJson=js;
+      if(obj.databases){for(var k in obj.databases)DBS[k]=obj.databases[k];}
+      var REQUIRED_DBS=["tasks","wins","routines","capture","focusSessions","dailyLog"];
+      var stillMissing=CCData.missingDbKeys(DBS,REQUIRED_DBS);
+      if(stillMissing.length){DIAG.err="Missing DB: "+stillMissing.join(", ");setSync("config","Missing DB: "+stillMissing.join(", "));}
+      var persisted=obj.databases||{};
+      var toReg=CCData.missingDbKeys(persisted,REQUIRED_DBS).filter(function(x){return !!DBS[x];});
+      if(toReg.length){var resolved={};for(var ri=0;ri<toReg.length;ri++){resolved[toReg[ri]]=DBS[toReg[ri]];}await saveState({databases:CCData.mergeResolvedDatabases(persisted,resolved)});}
+    }
     return obj;
   }
   async function liveLoad(){
