@@ -61,6 +61,11 @@
   .hero-note{font-size:12px;color:var(--txt-faint);margin-top:6px;max-width:640px;}
   .main{display:grid;grid-template-columns:1.7fr 1fr;gap:18px;}
   @media(max-width:960px){.main{grid-template-columns:1fr;}}
+  /* Layout A (v2.0.0): Today tab — Row1 tasks|calendar 60/40, Row2 Focus|Capture|Win, Row3 Routine reset full-width */
+  .today-row1{display:grid;grid-template-columns:1.5fr 1fr;gap:18px;align-items:start;}
+  .today-row2{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:start;margin-top:18px;}
+  .today-row3{margin-top:18px;}
+  @media(max-width:960px){.today-row1,.today-row2{grid-template-columns:1fr;}}
   .panel-head{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line);}
   .panel-title{font-size:13px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;}
   .count-chip{font-size:10px;color:var(--txt-faint);letter-spacing:.08em;}

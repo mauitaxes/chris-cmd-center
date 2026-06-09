@@ -20,7 +20,7 @@ __CC_STYLES__
     <div class="meta"><b>Today:</b> <span id="today-date">—</span> · Hawaii<br/><b>Status:</b> <span id="sync-status">loading…</span></div>
     <span class="clock" id="clock">--:--:--</span>
     <div class="spacer"></div>
-    <span class="badge-ver" id="badge-ver">v1.5.0<br/>Notion backend</span>
+    <span class="badge-ver" id="badge-ver">v2.0.0<br/>Todoist · Notion</span>
     <button class="btn cyan" id="btn-brief">Brief</button>
     <button class="btn amber" id="btn-sync">Sync</button>
   </div>
@@ -123,7 +123,7 @@ __CC_STYLES__
       </section>
 
       <section>
-        <div class="main">
+        <div class="today-row1">
           <div>
             <div class="card" id="notion-today-card" style="padding:0;display:none;">
               <div class="panel-head">
@@ -138,7 +138,7 @@ __CC_STYLES__
               </div>
               <div id="task-list"><div class="empty">Loading tasks…</div></div>
             </div>
-            <div class="card col-gap" style="padding:0;">
+            <div class="card" style="padding:0;">
               <div class="panel-head">
                 <span class="panel-title">Today</span>
                 <div class="spacer"></div>
@@ -147,7 +147,10 @@ __CC_STYLES__
               </div>
               <div id="td-today-list"><div class="empty">Loading Todoist…</div></div>
             </div>
-            <div class="card col-gap" style="padding:0;">
+          </div>
+
+          <div>
+            <div class="card" style="padding:0;">
               <div class="panel-head">
                 <span class="panel-title">Schedule · Today</span>
                 <span class="tag cyan" style="margin-left:8px;">preview</span>
@@ -157,9 +160,10 @@ __CC_STYLES__
               <div id="td-sched-list"><div class="empty">Loading schedule…</div></div>
             </div>
           </div>
+        </div>
 
-          <div>
-            <div class="card" style="padding:0;">
+        <div class="today-row2">
+          <div class="card" style="padding:0;">
               <div class="timer">
                 <div class="ring">
                   <svg viewBox="0 0 120 120" width="84" height="84">
@@ -180,7 +184,7 @@ __CC_STYLES__
                 <button class="btn amber" id="t-5">+5 min</button>
               </div>
             </div>
-            <div class="card col-gap">
+          <div class="card">
               <div class="section-label">Quick capture · brain dump</div>
               <div class="cap-row">
                 <input class="ipt" id="qa-cap" placeholder="Dump a thought — hit enter to stash…" />
@@ -188,7 +192,7 @@ __CC_STYLES__
               </div>
               <div id="cap-list"><div class="empty" style="padding:6px 0;">Nothing captured yet.</div></div>
             </div>
-            <div class="card col-gap">
+          <div class="card">
               <div class="section-label">Log a win · keep the dopamine</div>
               <div class="cap-row">
                 <input class="ipt" id="qa-win" placeholder="What went well? — hit enter to log…" />
@@ -196,7 +200,10 @@ __CC_STYLES__
               </div>
               <div id="win-list"><div class="empty" style="padding:6px 0;">No wins logged yet.</div></div>
             </div>
-            <div class="card col-gap">
+        </div>
+
+        <div class="today-row3">
+          <div class="card">
               <div class="section-label">Routine reset</div>
               <div class="hero" style="margin-top:2px;gap:16px;">
                 <div>
@@ -210,7 +217,6 @@ __CC_STYLES__
                 </div>
               </div>
             </div>
-          </div>
         </div>
       </section>
     </div>
