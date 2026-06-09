@@ -697,3 +697,37 @@ test("buildCompleteArgs: wraps id in ids[] with requestId (auto key when omitted
   assert.deepEqual(a.ids, ["222"]);
   assert.match(a.requestId, /^done-/);
 });
+
+test("optimisticRemove: returns a NEW array without the matching id; non-mutating; string-coerced", () => {
+  const tasks = [{id:"1",title:"a"},{id:"2",title:"b"},{id:"3",title:"c"}];
+  const next = C.optimisticRemove(tasks, 2);            // number id coerced to match "2"
+  assert.deepEqual(next.map(t=>t.id), ["1","3"]);
+  assert.equal(tasks.length, 3);                         // original untouched (rollback snapshot stays valid)
+  assert.notEqual(next, tasks);
+});
+
+test("optimisticRemove: unknown id -> shallow copy unchanged; null/empty inputs -> []", () => {
+  const tasks = [{id:"1"}];
+  const same = C.optimisticRemove(tasks, "999");
+  assert.deepEqual(same.map(t=>t.id), ["1"]);
+  assert.notEqual(same, tasks);
+  assert.deepEqual(C.optimisticRemove(null, "1"), []);
+  assert.deepEqual(C.optimisticRemove(undefined, "1"), []);
+});
+
+test("optimisticRemove: returns a NEW array without the matching id; non-mutating; string-coerced", () => {
+  const tasks = [{id:"1",title:"a"},{id:"2",title:"b"},{id:"3",title:"c"}];
+  const next = C.optimisticRemove(tasks, 2);            // number id coerced to match "2"
+  assert.deepEqual(next.map(t=>t.id), ["1","3"]);
+  assert.equal(tasks.length, 3);                         // original untouched (rollback snapshot stays valid)
+  assert.notEqual(next, tasks);
+});
+
+test("optimisticRemove: unknown id -> shallow copy unchanged; null/empty inputs -> []", () => {
+  const tasks = [{id:"1"}];
+  const same = C.optimisticRemove(tasks, "999");
+  assert.deepEqual(same.map(t=>t.id), ["1"]);
+  assert.notEqual(same, tasks);
+  assert.deepEqual(C.optimisticRemove(null, "1"), []);
+  assert.deepEqual(C.optimisticRemove(undefined, "1"), []);
+});

@@ -401,6 +401,13 @@
   function buildCompleteArgs(id, key){
     return { ids:[String(id)], requestId:key||idempotencyKey("done") };
   }
+  // Optimistic check-off: return a NEW array with the matching id removed (id string-coerced).
+  // Non-mutating so the caller can keep the original as a rollback snapshot. Null/empty -> [].
+  function optimisticRemove(tasks, id){
+    if(!Array.isArray(tasks)) return [];
+    var target=String(id);
+    return tasks.filter(function(t){ return t && String(t.id)!==target; });
+  }
 
   return {
     unwrap: unwrap,
@@ -442,7 +449,8 @@
     quickAddProjectId: quickAddProjectId,
     idempotencyKey: idempotencyKey,
     buildQuickAddArgs: buildQuickAddArgs,
-    buildCompleteArgs: buildCompleteArgs
+    buildCompleteArgs: buildCompleteArgs,
+    optimisticRemove: optimisticRemove
   };
 });
 /*__CC_DATA_END__*/

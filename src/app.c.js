@@ -108,6 +108,51 @@
   }
   function openTodoistInbox(){ try{ window.open(TODOIST_INBOX_URL,"_blank","noopener"); }catch(e){} }
 
+  // ---- Task 5 WRITES: optimistic check-off (+rollback) and quick-add. Smoke-hookable
+  // (window.__ccCheckOff / __ccQuickAdd) so writes are live-verifiable BEFORE the read-only
+  // panel is flipped interactive (UI placement / cutover is a separate, deliberate step). ----
+  function tdRepaintFrom(list){
+    app.todoistTasks=list;
+    app.todoistTiles=CCData.todoistTileCounts(list);
+    app.todoistPanel=CCData.splitTodayPanel(list,{today:hstDate(),threshold:tdOverdueThreshold()});
+    renderTodoistToday();
+  }
+  // Optimistic complete: drop the row immediately, POST close, restore the snapshot on failure.
+  // One idempotency key per attempt (reused on retry by the offline queue in Task 9).
+  async function tdCheckOff(id){
+    if(!id) return {ok:false, error:"no id"};
+    var snapshot=app.todoistTasks||[];                 // optimisticRemove is non-mutating -> safe rollback
+    var key=CCData.idempotencyKey("done");
+    tdRepaintFrom(CCData.optimisticRemove(snapshot, id));
+    try{
+      await call(TT.complete, CCData.buildCompleteArgs(id, key));
+      return {ok:true, id:String(id), key:key};
+    }catch(e){
+      tdRepaintFrom(snapshot);                          // rollback
+      DIAG.err=String((e&&e.message)||e);
+      return {ok:false, id:String(id), key:key, error:DIAG.err};
+    }
+  }
+  // Quick-add: area -> its sub-project, global -> Inbox (routing in CCData.buildQuickAddArgs).
+  // Authoritative refresh on success (no tmp-id juggling); empty title -> no-op.
+  async function tdQuickAdd(title, area){
+    var tp=(app.state&&app.state.todoistProjects)||{};
+    var key=CCData.idempotencyKey("add");
+    var args=CCData.buildQuickAddArgs(title, area, tp, key);
+    if(!args) return {ok:false, error:"empty title"};
+    try{
+      var r=await call(TT.quickAdd, args);
+      try{ await loadTodoistTiles(); renderTodoistToday(); }catch(e2){}
+      var o=(r&&r.tasks)?r:(toObj(r)||{});
+      var created=(o&&o.tasks&&o.tasks[0])||null;
+      return {ok:true, projectId:args.tasks[0].projectId, id:created&&created.id, key:key};
+    }catch(e){
+      DIAG.err=String((e&&e.message)||e);
+      return {ok:false, key:key, error:DIAG.err};
+    }
+  }
+  try{ window.__ccCheckOff=tdCheckOff; window.__ccQuickAdd=tdQuickAdd; }catch(e){}
+
   // ---- 3c calendar: normalize MCP event -> small shape; all-day uses start.date, timed uses start.dateTime ----
   function normalizeCalEvent(raw, calendarId){
     raw=raw||{}; var st=raw.start||{}, en=raw.end||{};
