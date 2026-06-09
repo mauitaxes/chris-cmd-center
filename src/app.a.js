@@ -261,12 +261,11 @@
   }
 
   // ---- actions (work in both modes; live also writes Notion) ----
-  async function maybeStreak(){var t=todayHST();var s=app.state;if(s.lastCompleted===t&&s.lastWinDate===t&&s.lastStreakDate!==t){var ns=(+s.streak||0)+1;await saveState({streak:ns,lastStreakDate:t});toast("Streak → "+ns+" days");renderTopStats();}}
   async function toggleTask(t){
     t.done=!t.done;renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();
     lsPush({t:"task",id:t.id,done:t.done});
     if(app.mode==="live"){try{await call(T.update,{page_id:t.id,command:"update_properties",properties:{Done:t.done?"__YES__":"__NO__"}});lsRemove({t:"task",id:t.id,done:t.done});}catch(e){noteQueued();}}
-    if(t.done){await saveState({lastCompleted:todayHST()});await maybeStreak();}
+    if(t.done){await saveState({lastCompleted:todayHST()});}
     renderTopStats();
   }
   async function togglePriority(t){
@@ -315,7 +314,7 @@
   async function addWin(title){title=(title||"").trim();if(!title)return;var d=todayHST();app.wins.unshift({title:title,date:d});renderWins();renderTopStats();toast("Win logged");
     lsPush({t:"win",title:title,date:d});
     if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.wins},pages:[{properties:{Win:title,"date:Date:start":d}}]});lsRemove({t:"win",title:title,date:d});}catch(e){noteQueued();}}
-    await saveState({lastWinDate:d});await maybeStreak();
+    await saveState({lastWinDate:d});renderTopStats();
   }
   async function logFocus(min){var fm=(+app.state.focusMinutesToday||0)+min;app.state.focusMinutesToday=fm;renderTopStats();
     lsPush({t:"focus",min:min});

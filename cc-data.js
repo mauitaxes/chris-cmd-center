@@ -460,21 +460,43 @@
   // completed today AND morning routine >=80% done. Idempotent per day (lastStreakDate guard). Grace:
   // on/before streakGraceUntil the day secures regardless (cutover). Zero routine steps -> skip
   // condition 3 + warn. Pure; never resets the streak (break logic is a separate concern).
-  function evaluateStreak(o){
+  // Shared predicate checker for the streak rule (single source for evaluateStreak + streakStatus, so
+  // the nightly job's math and the dashboard's status text can never diverge). Pure.
+  function streakConditions(o){
     o=o||{};
-    var streak=+o.streak||0;
     var today=o.today!=null?String(o.today):"";
     var last=o.lastStreakDate!=null?String(o.lastStreakDate):"";
+    var hasWin=!!o.hasWinToday;
     var didComplete=(typeof o.completedToday==="number")?(o.completedToday>0):!!o.completedToday;
     var steps=+o.routineSteps||0;
     var warnZeroRoutine=!(steps>0);
     var routineOk=warnZeroRoutine?true:((+o.routinePct||0)>=0.8);
     var inGrace=!!(o.streakGraceUntil&&today&&today<=String(o.streakGraceUntil));
-    var conditionsMet=(!!o.hasWinToday)&&didComplete&&routineOk;
-    var secured=conditionsMet||inGrace;
-    if(last&&last===today){ return { streak:streak, lastStreakDate:last, secured:true, warnZeroRoutine:warnZeroRoutine }; }
-    if(secured){ return { streak:streak+1, lastStreakDate:today, secured:true, warnZeroRoutine:warnZeroRoutine }; }
-    return { streak:streak, lastStreakDate:last, secured:false, warnZeroRoutine:warnZeroRoutine };
+    var alreadyToday=!!(last&&last===today);
+    var conditionsMet=hasWin&&didComplete&&routineOk;
+    return { today:today, last:last, hasWin:hasWin, didComplete:didComplete, routineOk:routineOk,
+             warnZeroRoutine:warnZeroRoutine, inGrace:inGrace, alreadyToday:alreadyToday, conditionsMet:conditionsMet };
+  }
+  function evaluateStreak(o){
+    var streak=+((o||{}).streak)||0;
+    var c=streakConditions(o);
+    if(c.alreadyToday){ return { streak:streak, lastStreakDate:c.last, secured:true, warnZeroRoutine:c.warnZeroRoutine }; }
+    if(c.conditionsMet||c.inGrace){ return { streak:streak+1, lastStreakDate:c.today, secured:true, warnZeroRoutine:c.warnZeroRoutine }; }
+    return { streak:streak, lastStreakDate:c.last, secured:false, warnZeroRoutine:c.warnZeroRoutine };
+  }
+  // Display-only streak status for the dashboard (Task 8). NEVER advances the streak. Returns whether
+  // today is already secured (or would be), the UNMET conditions in win/task/routine order, a
+  // zero-routine-steps warning (routine condition skipped), and whether grace is in effect. Pure.
+  function streakStatus(o){
+    var c=streakConditions(o);
+    var secured=c.alreadyToday||c.conditionsMet||c.inGrace;
+    var needs=[];
+    if(!secured){
+      if(!c.hasWin) needs.push("win");
+      if(!c.didComplete) needs.push("task");
+      if(!c.warnZeroRoutine && !c.routineOk) needs.push("routine");
+    }
+    return { secured:secured, needs:needs, warnZeroRoutine:c.warnZeroRoutine, graced:c.inGrace };
   }
   // Build ONE update-tasks args object for the nightly relabel:
   //  - todayTasks (currently @today): drop "today"
@@ -566,6 +588,7 @@
     withTodayLabel: withTodayLabel,
     routinePct: routinePct,
     evaluateStreak: evaluateStreak,
+    streakStatus: streakStatus,
     buildNightlyTodoistArgs: buildNightlyTodoistArgs,
     buildNightlyStateUpdates: buildNightlyStateUpdates,
     progressGauge: progressGauge,

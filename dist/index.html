@@ -862,21 +862,43 @@
   // completed today AND morning routine >=80% done. Idempotent per day (lastStreakDate guard). Grace:
   // on/before streakGraceUntil the day secures regardless (cutover). Zero routine steps -> skip
   // condition 3 + warn. Pure; never resets the streak (break logic is a separate concern).
-  function evaluateStreak(o){
+  // Shared predicate checker for the streak rule (single source for evaluateStreak + streakStatus, so
+  // the nightly job's math and the dashboard's status text can never diverge). Pure.
+  function streakConditions(o){
     o=o||{};
-    var streak=+o.streak||0;
     var today=o.today!=null?String(o.today):"";
     var last=o.lastStreakDate!=null?String(o.lastStreakDate):"";
+    var hasWin=!!o.hasWinToday;
     var didComplete=(typeof o.completedToday==="number")?(o.completedToday>0):!!o.completedToday;
     var steps=+o.routineSteps||0;
     var warnZeroRoutine=!(steps>0);
     var routineOk=warnZeroRoutine?true:((+o.routinePct||0)>=0.8);
     var inGrace=!!(o.streakGraceUntil&&today&&today<=String(o.streakGraceUntil));
-    var conditionsMet=(!!o.hasWinToday)&&didComplete&&routineOk;
-    var secured=conditionsMet||inGrace;
-    if(last&&last===today){ return { streak:streak, lastStreakDate:last, secured:true, warnZeroRoutine:warnZeroRoutine }; }
-    if(secured){ return { streak:streak+1, lastStreakDate:today, secured:true, warnZeroRoutine:warnZeroRoutine }; }
-    return { streak:streak, lastStreakDate:last, secured:false, warnZeroRoutine:warnZeroRoutine };
+    var alreadyToday=!!(last&&last===today);
+    var conditionsMet=hasWin&&didComplete&&routineOk;
+    return { today:today, last:last, hasWin:hasWin, didComplete:didComplete, routineOk:routineOk,
+             warnZeroRoutine:warnZeroRoutine, inGrace:inGrace, alreadyToday:alreadyToday, conditionsMet:conditionsMet };
+  }
+  function evaluateStreak(o){
+    var streak=+((o||{}).streak)||0;
+    var c=streakConditions(o);
+    if(c.alreadyToday){ return { streak:streak, lastStreakDate:c.last, secured:true, warnZeroRoutine:c.warnZeroRoutine }; }
+    if(c.conditionsMet||c.inGrace){ return { streak:streak+1, lastStreakDate:c.today, secured:true, warnZeroRoutine:c.warnZeroRoutine }; }
+    return { streak:streak, lastStreakDate:c.last, secured:false, warnZeroRoutine:c.warnZeroRoutine };
+  }
+  // Display-only streak status for the dashboard (Task 8). NEVER advances the streak. Returns whether
+  // today is already secured (or would be), the UNMET conditions in win/task/routine order, a
+  // zero-routine-steps warning (routine condition skipped), and whether grace is in effect. Pure.
+  function streakStatus(o){
+    var c=streakConditions(o);
+    var secured=c.alreadyToday||c.conditionsMet||c.inGrace;
+    var needs=[];
+    if(!secured){
+      if(!c.hasWin) needs.push("win");
+      if(!c.didComplete) needs.push("task");
+      if(!c.warnZeroRoutine && !c.routineOk) needs.push("routine");
+    }
+    return { secured:secured, needs:needs, warnZeroRoutine:c.warnZeroRoutine, graced:c.inGrace };
   }
   // Build ONE update-tasks args object for the nightly relabel:
   //  - todayTasks (currently @today): drop "today"
@@ -968,6 +990,7 @@
     withTodayLabel: withTodayLabel,
     routinePct: routinePct,
     evaluateStreak: evaluateStreak,
+    streakStatus: streakStatus,
     buildNightlyTodoistArgs: buildNightlyTodoistArgs,
     buildNightlyStateUpdates: buildNightlyStateUpdates,
     progressGauge: progressGauge,
@@ -1238,12 +1261,11 @@
   }
 
   // ---- actions (work in both modes; live also writes Notion) ----
-  async function maybeStreak(){var t=todayHST();var s=app.state;if(s.lastCompleted===t&&s.lastWinDate===t&&s.lastStreakDate!==t){var ns=(+s.streak||0)+1;await saveState({streak:ns,lastStreakDate:t});toast("Streak → "+ns+" days");renderTopStats();}}
   async function toggleTask(t){
     t.done=!t.done;renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();
     lsPush({t:"task",id:t.id,done:t.done});
     if(app.mode==="live"){try{await call(T.update,{page_id:t.id,command:"update_properties",properties:{Done:t.done?"__YES__":"__NO__"}});lsRemove({t:"task",id:t.id,done:t.done});}catch(e){noteQueued();}}
-    if(t.done){await saveState({lastCompleted:todayHST()});await maybeStreak();}
+    if(t.done){await saveState({lastCompleted:todayHST()});}
     renderTopStats();
   }
   async function togglePriority(t){
@@ -1292,7 +1314,7 @@
   async function addWin(title){title=(title||"").trim();if(!title)return;var d=todayHST();app.wins.unshift({title:title,date:d});renderWins();renderTopStats();toast("Win logged");
     lsPush({t:"win",title:title,date:d});
     if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.wins},pages:[{properties:{Win:title,"date:Date:start":d}}]});lsRemove({t:"win",title:title,date:d});}catch(e){noteQueued();}}
-    await saveState({lastWinDate:d});await maybeStreak();
+    await saveState({lastWinDate:d});renderTopStats();
   }
   async function logFocus(min){var fm=(+app.state.focusMinutesToday||0)+min;app.state.focusMinutesToday=fm;renderTopStats();
     lsPush({t:"focus",min:min});
@@ -1734,8 +1756,15 @@
     $("v-mom").textContent=mom;ring("g-mom",mom/100);
     var status,col;if(mom>=70){status="ON TRACK";col="c-green";}else if(mom>=40){status="BUILDING";col="c-amber";}else{status="GET STARTED";col="c-red";}
     var ms=$("mom-status");ms.textContent=status;ms.className="hero-status "+col;
-    var needTask=app.state.lastCompleted!==today,needWin=app.state.lastWinDate!==today;
-    var sn=app.state.lastStreakDate===today?"Streak secured for today":("Streak needs"+(needTask?" 1 task":"")+(needTask&&needWin?" +":"")+(needWin?" 1 win":"")+" today");
+    // Task 8: dashboard only DISPLAYS the streak status (CCData.streakStatus); the nightly job is the
+    // sole writer of streak/lastStreakDate. completedToday: prefer the responsive in-day proxy
+    // (lastCompleted===today), falling back to the nightly progress count when present.
+    var rpc=CCData.routinePct(st);
+    var compToday=(app.state.lastCompleted===today)?1:((app.state.progress&&app.state.progress.date===today)?(+app.state.progress.completedToday||0):0);
+    var ss=CCData.streakStatus({hasWinToday:app.state.lastWinDate===today,completedToday:compToday,routinePct:rpc.pct,routineSteps:rpc.total,lastStreakDate:app.state.lastStreakDate,today:today,streakGraceUntil:app.state.streakGraceUntil});
+    var NEEDLBL={win:"1 win",task:"1 task",routine:"routine \u226580%"};
+    var sn=ss.secured?"Streak secured for today":("Streak needs "+ss.needs.map(function(k){return NEEDLBL[k];}).join(" + ")+" today");
+    if(ss.warnZeroRoutine) sn+=" \u00b7 routine has no steps";
     $("mom-note").textContent=sn+" · "+open+" open ("+prio+" priority) · "+focus+" focus min";
   }
   // Task 7: read-only missed-refresh banner — the nightly job owns the write; client only reads lastRefreshDate.

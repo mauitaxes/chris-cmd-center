@@ -166,8 +166,15 @@
     $("v-mom").textContent=mom;ring("g-mom",mom/100);
     var status,col;if(mom>=70){status="ON TRACK";col="c-green";}else if(mom>=40){status="BUILDING";col="c-amber";}else{status="GET STARTED";col="c-red";}
     var ms=$("mom-status");ms.textContent=status;ms.className="hero-status "+col;
-    var needTask=app.state.lastCompleted!==today,needWin=app.state.lastWinDate!==today;
-    var sn=app.state.lastStreakDate===today?"Streak secured for today":("Streak needs"+(needTask?" 1 task":"")+(needTask&&needWin?" +":"")+(needWin?" 1 win":"")+" today");
+    // Task 8: dashboard only DISPLAYS the streak status (CCData.streakStatus); the nightly job is the
+    // sole writer of streak/lastStreakDate. completedToday: prefer the responsive in-day proxy
+    // (lastCompleted===today), falling back to the nightly progress count when present.
+    var rpc=CCData.routinePct(st);
+    var compToday=(app.state.lastCompleted===today)?1:((app.state.progress&&app.state.progress.date===today)?(+app.state.progress.completedToday||0):0);
+    var ss=CCData.streakStatus({hasWinToday:app.state.lastWinDate===today,completedToday:compToday,routinePct:rpc.pct,routineSteps:rpc.total,lastStreakDate:app.state.lastStreakDate,today:today,streakGraceUntil:app.state.streakGraceUntil});
+    var NEEDLBL={win:"1 win",task:"1 task",routine:"routine \u226580%"};
+    var sn=ss.secured?"Streak secured for today":("Streak needs "+ss.needs.map(function(k){return NEEDLBL[k];}).join(" + ")+" today");
+    if(ss.warnZeroRoutine) sn+=" \u00b7 routine has no steps";
     $("mom-note").textContent=sn+" · "+open+" open ("+prio+" priority) · "+focus+" focus min";
   }
   // Task 7: read-only missed-refresh banner — the nightly job owns the write; client only reads lastRefreshDate.

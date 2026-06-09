@@ -1,0 +1,39 @@
+feat(task8): streak display-only — retire client increment, honest status line
+
+Task 8 makes the dashboard DISPLAY the stored streak and an honest status line
+without ever computing/advancing the streak. The nightly job (Task 7) is now the
+single writer of streak/lastStreakDate.
+
+cc-data.js
+- Factor shared streakConditions() predicate; evaluateStreak() now calls it
+  (signature/return unchanged — all Task 7 tests stay green).
+- Add pure streakStatus({hasWinToday,completedToday,routinePct,routineSteps,
+  lastStreakDate,today,streakGraceUntil}) -> {secured,needs,warnZeroRoutine,graced}.
+  needs lists only unmet conditions (win/task/routine order); zero routine steps
+  omits "routine" and sets warnZeroRoutine; grace + already-secured-today honored.
+
+src/app.a.js
+- Remove maybeStreak() and its call sites in toggleTask/addWin; drop the
+  "Streak -> N days" toast. Client no longer writes streak/lastStreakDate
+  (still writes lastCompleted/lastWinDate as nightly-job inputs).
+
+src/app.b.js
+- renderTopStats mom-note now composed from CCData.streakStatus, using the
+  real 3-condition rule. completedToday prefers the in-day proxy
+  (lastCompleted===today), falling back to nightly progress.completedToday.
+  Routine % from CCData.routinePct(steps()). Zero-routine note appended.
+
+tests
+- New cc-data.streak.test.js (12 tests, auto-discovered): secured, each missing
+  condition, win/task/routine ordering, zero-steps warn, grace, already-secured,
+  no-streak-mutation, and an evaluateStreak/streakStatus parity guard.
+  (Kept separate because cc-data.test.js sits at the ~44KB bash-read limit.)
+- Suite: 196/196 green (was 184).
+
+verify: node --test 196 green; node cc-build.js clean (dist 122,399 B); every
+build input < 40 KB; dist <script> vm-parses OK; maybeStreak absent from dist;
+streakStatus wired. Live-checked against Notion State 2026-06-08: renders
+"Streak needs 1 win today" (5 tasks + 87.5% routine done, no win) — agrees with
+nightly progress.streakSecured=false.
+
+No merge to main / no deploy (Phase 1 not complete; Tasks 9 & 10 remain).
