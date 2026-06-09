@@ -1,0 +1,50 @@
+feat(task9): offline queue for Todoist writes — idempotent UUID flush to Inbox
+
+Route Todoist quick-add (global Quick Capture -> Inbox) and check-off through the
+existing offline queue. The idempotency key is minted ONCE at enqueue and reused
+on every retry, so the proxy lifts requestId -> X-Request-Id and Todoist de-dupes:
+a reconnect flush never creates duplicates. Additive — no cutover; the legacy
+Notion `cap` flush is untouched (matches Task 8 discipline). Reuses the ONE queue
+(lsPush/applyLocal/flushPending) — no second queue, no second flush loop.
+
+cc-data.js (pure, exported)
+- queueTodoistAdd({title,area,key}) / queueTodoistDone({id,key}) -> the op the
+  client lsPushes. Key minted by idempotencyKey if absent, PRESERVED if present.
+  Empty/whitespace title -> null; missing id -> null.
+- dedupeQueueByKey(pending): order-preserving collapse of ops sharing a key
+  (keeps first; keyless op types always pass through) — defensive against a
+  double-enqueue double-creating.
+- todoistFlushCall(op,todoistProjects) -> {name,args} reusing buildQuickAddArgs/
+  buildCompleteArgs with op.key, so replay carries the SAME requestId. Empty
+  title / unknown op -> null. Unknown/global area routes to Inbox.
+
+src/app.c.js
+- tdQuickAdd/tdCheckOff: on failure, lsPush the new tdAdd/tdDone op carrying the
+  already-minted key + noteQueued() instead of discarding the op. Check-off keeps
+  its optimistic removal (op is durably queued); success path unchanged.
+
+src/app.a.js
+- flushPending: dedupeQueueByKey(pending) at the top; new tdAdd/tdDone branch
+  replays via call(TT.quickAdd|TT.complete, todoistFlushCall(...).args) with the
+  SAME op.key. Failures stay in the queue (existing failed[] pattern).
+
+src/app.b.js (§3d honesty cleanup)
+- openBrief() streak seed text now uses the real 3-condition rule (win + task +
+  routine >=80%) via CCData.streakStatus — same source the dashboard uses — so
+  the morning brief and the dashboard never disagree. Additive; structure intact.
+
+tests
+- New cc-data.queue.test.js (14 tests, auto-discovered): key preserved across
+  enqueue->flush (identical requestId on retry, for add and done); dedupe collapses
+  same-key dups (order-preserving, keyless pass-through); empty title -> null;
+  unknown area -> inbox; dedupe+flush yields one stable requestId per key.
+  (Separate file: cc-data.test.js is at the ~44 KB bash-read limit.)
+- Root suite: 210/210 green (was 196). Proxy/server: 45/45 green (untouched).
+
+verify: node --test 210 green; proxy 45 green; node cc-build.js clean
+(dist 126,671 B); every build input < 40 KB; dist <script> vm-parses OK;
+grep confirms tdAdd/tdDone wired into flushPending + enqueue carries key +
+dedupe at flush start. Idempotency proof: flushing the same queued op twice
+yields the identical requestId (add + done) -> X-Request-Id dedupes.
+
+No merge to main / no deploy (Phase 1 not complete; Task 10 remains).

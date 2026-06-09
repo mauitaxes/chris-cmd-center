@@ -196,7 +196,14 @@
     var today=hstDate();var open=app.tasks.filter(function(t){return !t.done;});var prio=open.filter(function(t){return t.priority;});
     var st=steps().filter(function(r){return !r.done;});
     var lines=[];lines.push("Good morning. Here's your "+today+" brief.");lines.push("");
-    lines.push("Streak: "+(+app.state.streak||0)+" days. "+(app.state.lastStreakDate===today?"Secured today.":"Complete 1 task + log 1 win to keep it."));
+    // Task 9 (§3d honesty): seed the brief with the REAL 3-condition streak rule (win + task +
+    // routine ≥80%) via the same CCData.streakStatus the dashboard uses, so brief and dashboard never disagree.
+    var bRpc=CCData.routinePct(steps());
+    var bComp=(app.state.lastCompleted===today)?1:((app.state.progress&&app.state.progress.date===today)?(+app.state.progress.completedToday||0):0);
+    var bSs=CCData.streakStatus({hasWinToday:app.state.lastWinDate===today,completedToday:bComp,routinePct:bRpc.pct,routineSteps:bRpc.total,lastStreakDate:app.state.lastStreakDate,today:today,streakGraceUntil:app.state.streakGraceUntil});
+    var bNEED={win:"1 win",task:"1 task",routine:"routine ≥80%"};
+    var bKeep=bSs.secured?"Secured today.":("To keep it: "+bSs.needs.map(function(k){return bNEED[k];}).join(" + ")+(bSs.warnZeroRoutine?" (routine has no steps)":"")+".");
+    lines.push("Streak: "+(+app.state.streak||0)+" days. "+bKeep);
     if(st.length){lines.push("");lines.push("Morning routine left: "+st.map(function(r){return r.name;}).join(", "));}
     lines.push("");lines.push("Tasks: "+open.length+" open, "+prio.length+" priority.");
     if(prio.length){lines.push("");lines.push("Priority first:");prio.slice(0,5).forEach(function(t){lines.push("  ★ "+t.title);});}

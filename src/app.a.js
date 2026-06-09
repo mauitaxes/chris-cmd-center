@@ -211,7 +211,7 @@
     app.caps=caps;
   }
   async function flushPending(){
-    var o=lsGet();var p=o.pending||[];if(!p.length)return 0;
+    var o=lsGet();var p=CCData.dedupeQueueByKey(o.pending||[]);if(!p.length)return 0;
     var failed=[];
     for(var i=0;i<p.length;i++){var op=p[i];try{
       if(op.t==="task")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Done:op.done?"__YES__":"__NO__"}});
@@ -237,6 +237,12 @@
       else if(op.t==="capDel")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Processed:"__YES__"}});
       else if(op.t==="report")await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:"[Daily Report "+op.date+"]",Notes:op.txt,Processed:"__YES__","date:Captured:start":op.date}}]});
       else if(op.t==="state")await writeStateNow(op.updates);
+      else if(op.t==="tdAdd"||op.t==="tdDone"){
+        // Task 9: replay Todoist write carrying the SAME op.key -> proxy lifts requestId into
+        // X-Request-Id -> Todoist de-dupes, so a reconnect flush never creates duplicates.
+        var fc=CCData.todoistFlushCall(op,(app.state&&app.state.todoistProjects)||{});
+        if(fc)await call(fc.name==="complete-tasks"?TT.complete:TT.quickAdd, fc.args);
+      }
     }catch(e){failed.push(op);}}
     var o2=lsGet();o2.pending=failed;lsSet(o2);
     return failed.length;

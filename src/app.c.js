@@ -129,9 +129,13 @@
       await call(TT.complete, CCData.buildCompleteArgs(id, key));
       return {ok:true, id:String(id), key:key};
     }catch(e){
-      tdRepaintFrom(snapshot);                          // rollback
+      // Task 9: durably queue the check-off (SAME key -> X-Request-Id dedupe on flush) instead of
+      // losing it. Keep the optimistic removal: the row stays gone, the op flushes on reconnect.
       DIAG.err=String((e&&e.message)||e);
-      return {ok:false, id:String(id), key:key, error:DIAG.err};
+      var qd=CCData.queueTodoistDone({id:id, key:key});
+      if(qd){ lsPush(qd); noteQueued(); }
+      else { tdRepaintFrom(snapshot); }                 // no id to queue -> roll back as before
+      return {ok:false, id:String(id), key:key, queued:!!qd, error:DIAG.err};
     }
   }
   // Quick-add: area -> its sub-project, global -> Inbox (routing in CCData.buildQuickAddArgs).
@@ -148,8 +152,12 @@
       var created=(o&&o.tasks&&o.tasks[0])||null;
       return {ok:true, projectId:args.tasks[0].projectId, id:created&&created.id, key:key};
     }catch(e){
+      // Task 9: durably queue the capture (SAME key -> X-Request-Id dedupe on flush). Global/unknown
+      // area routes to Inbox via buildQuickAddArgs at flush time. Empty title can't reach here.
       DIAG.err=String((e&&e.message)||e);
-      return {ok:false, key:key, error:DIAG.err};
+      var qa=CCData.queueTodoistAdd({title:title, area:area, key:key});
+      if(qa){ lsPush(qa); noteQueued(); }
+      return {ok:false, key:key, queued:!!qa, error:DIAG.err};
     }
   }
   // ---- Task 6 WRITE: 3-way defer. Same optimistic+rollback shape as tdCheckOff. Recurring/specific-date

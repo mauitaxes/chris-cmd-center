@@ -539,6 +539,53 @@
     return !!l && l!==String(today==null?"":today);
   }
 
+  // ---- Task 9: offline-queue helpers for Todoist writes (pure; minted-once idempotency) ----
+  // Stamp a stable key onto a queued Todoist quick-add op. Key minted by idempotencyKey if absent,
+  // PRESERVED if already present (so every retry carries the SAME requestId -> X-Request-Id dedupe).
+  // Empty title -> null (nothing to queue). area defaults to "" (global Quick Capture -> Inbox).
+  function queueTodoistAdd(o){
+    o=o||{};
+    var title=(o.title||"").trim();
+    if(!title) return null;
+    return { t:"tdAdd", key:o.key||idempotencyKey("add"), title:title, area:o.area||"" };
+  }
+  // Stamp a stable key onto a queued Todoist check-off op. Missing id -> null. Key preserved if present.
+  function queueTodoistDone(o){
+    o=o||{};
+    if(o.id==null||o.id==="") return null;
+    return { t:"tdDone", key:o.key||idempotencyKey("done"), id:String(o.id) };
+  }
+  // Defensive de-dupe: collapse queued ops that share a `key` (a double-enqueue must not double-create).
+  // Order-preserving; keeps the FIRST op per key. Ops without a key (other op types) always pass through.
+  function dedupeQueueByKey(pending){
+    var out=[], seen={}, i, op, k;
+    if(!Array.isArray(pending)) return out;
+    for(i=0;i<pending.length;i++){
+      op=pending[i];
+      k=op&&op.key;
+      if(k==null||k===""){ out.push(op); continue; }
+      if(seen[k]) continue;
+      seen[k]=true; out.push(op);
+    }
+    return out;
+  }
+  // Map a queued Todoist op -> { name, args } for replay, reusing the SAME op.key so the requestId is
+  // identical on every flush. name is the MCP op suffix ("add-tasks"/"complete-tasks"). Empty title or
+  // unknown op type -> null (no-op). todoistProjects drives area->project (unknown/global -> Inbox).
+  function todoistFlushCall(op, todoistProjects){
+    op=op||{};
+    if(op.t==="tdAdd"){
+      var args=buildQuickAddArgs(op.title, op.area, todoistProjects, op.key);
+      if(!args) return null;                       // empty title -> nothing to flush
+      return { name:"add-tasks", args:args };
+    }
+    if(op.t==="tdDone"){
+      if(op.id==null||op.id==="") return null;
+      return { name:"complete-tasks", args:buildCompleteArgs(op.id, op.key) };
+    }
+    return null;
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -581,6 +628,10 @@
     buildQuickAddArgs: buildQuickAddArgs,
     buildCompleteArgs: buildCompleteArgs,
     optimisticRemove: optimisticRemove,
+    queueTodoistAdd: queueTodoistAdd,
+    queueTodoistDone: queueTodoistDone,
+    dedupeQueueByKey: dedupeQueueByKey,
+    todoistFlushCall: todoistFlushCall,
     withoutTodayLabel: withoutTodayLabel,
     tomorrowHst: tomorrowHst,
     classifyDefer: classifyDefer,
