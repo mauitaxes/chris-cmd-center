@@ -218,3 +218,68 @@ test("handler allow-list now permits add-tasks (reaches dispatch -> 200)", async
     assert.equal(res.statusCode, 200);
   } finally { globalThis.fetch = orig; }
 });
+
+// ---- Task 6: update-tasks (defer writes: label-only + dated snooze) ----
+test("dispatch update-tasks: POSTs /tasks/{id} with labels body + X-Request-Id, returns {tasks}", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u, o) => /\/api\/v1\/tasks\/\d+$/.test(u) && o.method === "POST",
+      respond: (u, o) => { const b = JSON.parse(o.body); return { body: { id: 777, content: "deferred", priority: 1, labels: b.labels || [], is_completed: false } }; } },
+  ]);
+  const r = await dispatch({ name: FULL("update-tasks"), args: { tasks: [{ id: "777", labels: ["energy-low"] }], requestId: "req-def" }, fetchImpl });
+  assert.equal(r.tasks.length, 1);
+  assert.equal(r.tasks[0].id, "777");
+  const c = fetchImpl.calls[0];
+  assert.equal(c.method, "POST");
+  assert.match(c.url, /\/api\/v1\/tasks\/777$/);
+  const body = JSON.parse(c.opts.body);
+  assert.deepEqual(body.labels, ["energy-low"]);        // today label dropped client-side
+  assert.equal("due_date" in body, false);               // label-only write: no date key
+  assert.equal((c.opts.headers || {})["X-Request-Id"], "req-def"); // single task: raw key
+  assert.equal(c.auth, "Bearer tdt_TESTTOKEN");
+  assert.equal("requestId" in body, false);              // never leaked into REST body
+  assert.equal("id" in body, false);                     // id is in the URL, not the body
+});
+
+test("dispatch update-tasks: dated snooze sends due_date, omits labels when not provided", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u, o) => /\/api\/v1\/tasks\/\d+$/.test(u) && o.method === "POST",
+      respond: (u, o) => ({ body: { id: 888, content: "x", priority: 1, labels: [], is_completed: false, due: { date: JSON.parse(o.body).due_date } } }) },
+  ]);
+  const r = await dispatch({ name: FULL("update-tasks"), args: { tasks: [{ id: "888", due_date: "2026-06-09" }] }, fetchImpl });
+  assert.equal(r.tasks[0].id, "888");
+  const body = JSON.parse(fetchImpl.calls[0].opts.body);
+  assert.equal(body.due_date, "2026-06-09");
+  assert.equal("labels" in body, false);                 // dated-only write: no labels key
+});
+
+test("dispatch update-tasks: combined labels + due_date in one body", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u, o) => /\/api\/v1\/tasks\/\d+$/.test(u) && o.method === "POST",
+      respond: (u, o) => ({ body: { id: 999, content: "x", priority: 1, labels: JSON.parse(o.body).labels, is_completed: false } }) },
+  ]);
+  await dispatch({ name: FULL("update-tasks"), args: { tasks: [{ id: "999", labels: ["energy-low"], due_date: "2026-06-09" }] }, fetchImpl });
+  const body = JSON.parse(fetchImpl.calls[0].opts.body);
+  assert.deepEqual(body.labels, ["energy-low"]);
+  assert.equal(body.due_date, "2026-06-09");
+});
+
+test("dispatch update-tasks: multiple tasks get per-item X-Request-Id suffixes", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u, o) => /\/api\/v1\/tasks\/\d+$/.test(u) && o.method === "POST",
+      respond: (u, o) => ({ body: { id: Math.floor(Math.random()*1e6), content: "x", priority: 1, labels: [], is_completed: false } }) },
+  ]);
+  await dispatch({ name: FULL("update-tasks"), args: { tasks: [{ id: "1", labels: [] }, { id: "2", labels: [] }], requestId: "req-multi" }, fetchImpl });
+  assert.equal((fetchImpl.calls[0].opts.headers || {})["X-Request-Id"], "req-multi-0");
+  assert.equal((fetchImpl.calls[1].opts.headers || {})["X-Request-Id"], "req-multi-1");
+  assert.match(fetchImpl.calls[0].url, /\/tasks\/1$/);
+  assert.match(fetchImpl.calls[1].url, /\/tasks\/2$/);
+});
+
+test("handler allow-list now permits update-tasks (reaches dispatch -> 200)", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ id: 9, content: "x", priority: 1, labels: [], is_completed: false }), text: async () => "{}" });
+  try {
+    const res = await handler({ httpMethod: "POST", headers: {}, body: JSON.stringify({ name: FULL("update-tasks"), args: { tasks: [{ id: "9", labels: [] }] } }) });
+    assert.equal(res.statusCode, 200);
+  } finally { globalThis.fetch = orig; }
+});

@@ -409,6 +409,39 @@
     return tasks.filter(function(t){ return t && String(t.id)!==target; });
   }
 
+  // ---- Task 6: pure defer helpers (classify path, label/date builders) ----
+  // Non-mutating: return a copy of labels minus "today". null/undefined -> [].
+  function withoutTodayLabel(labels){
+    return (Array.isArray(labels)?labels:[]).filter(function(l){ return l!=="today"; });
+  }
+  // today+1 as YYYY-MM-DD via pure UTC math (HST has no DST; todayStr already HST date). Unparseable -> "".
+  function tomorrowHst(todayStr){
+    var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(todayStr||""));
+    if(!m) return "";
+    var d=new Date(Date.UTC(+m[1], +m[2]-1, +m[3]+1));
+    return d.toISOString().slice(0,10);
+  }
+  // Classify a deferred task into its write path. Recurring ALWAYS deep-links (never mutate recurrence via API).
+  // choice: "not-today" | "tomorrow"(default) | "specific"/a date string. "specific"/date -> deep-link.
+  function classifyDefer(task, choice){
+    task=task||{};
+    if(task.recurring) return "deep-link";
+    choice=(choice==null||choice==="")?"tomorrow":String(choice);
+    if(choice==="not-today") return "not-today";
+    if(choice!=="tomorrow") return "deep-link"; // "specific" or an explicit YYYY-MM-DD the user picked
+    return (String(task.due||"")!=="") ? "tomorrow-dated" : "tomorrow-undated";
+  }
+  // Build update-tasks args for the two mutating paths; null for deep-link. All mutating paths drop "today";
+  // tomorrow-dated also snoozes due_date to tomorrowHst(todayStr) (today+1, not stale due). Undated queue is the caller's job.
+  function buildDeferArgs(task, choice, todayStr, key){
+    task=task||{};
+    var cls=classifyDefer(task, choice);
+    if(cls==="deep-link") return null;
+    var t={ id:String(task.id), labels:withoutTodayLabel(task.labels) };
+    if(cls==="tomorrow-dated") t.due_date=tomorrowHst(todayStr);
+    return { tasks:[t], requestId:key||idempotencyKey("defer") };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -450,7 +483,11 @@
     idempotencyKey: idempotencyKey,
     buildQuickAddArgs: buildQuickAddArgs,
     buildCompleteArgs: buildCompleteArgs,
-    optimisticRemove: optimisticRemove
+    optimisticRemove: optimisticRemove,
+    withoutTodayLabel: withoutTodayLabel,
+    tomorrowHst: tomorrowHst,
+    classifyDefer: classifyDefer,
+    buildDeferArgs: buildDeferArgs
   };
 });
 /*__CC_DATA_END__*/

@@ -9,7 +9,8 @@
     findActivity:TSERVER+"find-activity",
     complete:TSERVER+"complete-tasks",
     quickAdd:TSERVER+"add-tasks",
-    findProjects:TSERVER+"find-projects"
+    findProjects:TSERVER+"find-projects",
+    update:TSERVER+"update-tasks"
   };
   var TODOIST_INBOX_URL="https://app.todoist.com/app/inbox";
   // ---- 3c: Google Calendar (read-only Schedule lane). MCP-only path for now (Cowork populates;
@@ -151,7 +152,38 @@
       return {ok:false, key:key, error:DIAG.err};
     }
   }
-  try{ window.__ccCheckOff=tdCheckOff; window.__ccQuickAdd=tdQuickAdd; }catch(e){}
+  // ---- Task 6 WRITE: 3-way defer. Same optimistic+rollback shape as tdCheckOff. Recurring/specific-date
+  // deep-link (NEVER mutate recurrence via API); not-today/tomorrow-dated/tomorrow-undated go through
+  // update-tasks (drop "today", optionally snooze due+1 HST). Undated also queues retagTomorrow[] (Task 7
+  // re-applies @today tomorrow). Smoke-hookable (__ccDefer); panel stays read-only until cutover. ----
+  var TODOIST_TASK_URL="https://app.todoist.com/app/task/";
+  async function tdDefer(id, choice){
+    if(!id) return {ok:false, error:"no id"};
+    var snapshot=app.todoistTasks||[];                 // non-mutating helpers -> safe rollback snapshot
+    var task=null, i;
+    for(i=0;i<snapshot.length;i++){ if(snapshot[i] && String(snapshot[i].id)===String(id)){ task=snapshot[i]; break; } }
+    if(!task) return {ok:false, id:String(id), error:"task not found"};
+    var cls=CCData.classifyDefer(task, choice);
+    if(cls==="deep-link"){                              // recurring or user-picked specific date: no API mutation
+      try{ window.open(TODOIST_TASK_URL+encodeURIComponent(id),"_blank","noopener"); }catch(e){}
+      return {ok:true, id:String(id), classification:cls, deepLink:true};
+    }
+    var key=CCData.idempotencyKey("defer");
+    var args=CCData.buildDeferArgs(task, choice, hstDate(), key);
+    tdRepaintFrom(CCData.optimisticRemove(snapshot, id));   // deferring removes it from the Today panel
+    try{
+      await call(TT.update, args);
+      if(cls==="tomorrow-undated"){                    // queue id so the nightly job re-tags @today tomorrow
+        try{ await saveState({retagTomorrow: CCData.registerId(app.state&&app.state.retagTomorrow, String(id))}); }catch(e2){}
+      }
+      return {ok:true, id:String(id), classification:cls, key:key};
+    }catch(e){
+      tdRepaintFrom(snapshot);                          // rollback
+      DIAG.err=String((e&&e.message)||e);
+      return {ok:false, id:String(id), classification:cls, key:key, error:DIAG.err};
+    }
+  }
+  try{ window.__ccCheckOff=tdCheckOff; window.__ccQuickAdd=tdQuickAdd; window.__ccDefer=tdDefer; }catch(e){}
 
   // ---- 3c calendar: normalize MCP event -> small shape; all-day uses start.date, timed uses start.dateTime ----
   function normalizeCalEvent(raw, calendarId){

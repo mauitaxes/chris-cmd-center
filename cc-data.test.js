@@ -731,3 +731,71 @@ test("optimisticRemove: unknown id -> shallow copy unchanged; null/empty inputs 
   assert.deepEqual(C.optimisticRemove(null, "1"), []);
   assert.deepEqual(C.optimisticRemove(undefined, "1"), []);
 });
+
+// ── Task 6: defer pure helpers ─────────────────────────────────────────────
+test("withoutTodayLabel: drops 'today', keeps others, non-mutating; missing -> unchanged copy", () => {
+  const labels = ["today", "energy-low", "15m"];
+  const next = C.withoutTodayLabel(labels);
+  assert.deepEqual(next, ["energy-low", "15m"]);
+  assert.deepEqual(labels, ["today", "energy-low", "15m"]);
+  assert.notEqual(next, labels);
+  assert.deepEqual(C.withoutTodayLabel(["energy-low"]), ["energy-low"]);
+  assert.deepEqual(C.withoutTodayLabel(undefined), []);
+  assert.deepEqual(C.withoutTodayLabel(null), []);
+});
+
+test("tomorrowHst: returns today+1 as YYYY-MM-DD via pure date math (no local TZ)", () => {
+  assert.equal(C.tomorrowHst("2026-06-08"), "2026-06-09");
+  assert.equal(C.tomorrowHst("2026-06-30"), "2026-07-01");
+  assert.equal(C.tomorrowHst("2026-12-31"), "2027-01-01");
+  assert.equal(C.tomorrowHst("2026-02-28"), "2026-03-01");
+  assert.equal(C.tomorrowHst("garbage"), "");
+});
+
+test("classifyDefer: recurring -> deep-link regardless of choice", () => {
+  const rec = { id:"1", recurring:true, due:"2026-06-10", labels:["today"] };
+  assert.equal(C.classifyDefer(rec), "deep-link");
+  assert.equal(C.classifyDefer(rec, "not-today"), "deep-link");
+  assert.equal(C.classifyDefer(rec, "tomorrow"), "deep-link");
+});
+
+test("classifyDefer: choice 'not-today' -> not-today for non-recurring", () => {
+  assert.equal(C.classifyDefer({ id:"2", recurring:false, due:"2026-06-10", labels:["today"] }, "not-today"), "not-today");
+  assert.equal(C.classifyDefer({ id:"3", recurring:false, due:"", labels:["today"] }, "not-today"), "not-today");
+});
+
+test("classifyDefer: default/tomorrow -> dated vs undated by due presence", () => {
+  assert.equal(C.classifyDefer({ id:"4", recurring:false, due:"2026-06-10", labels:[] }), "tomorrow-dated");
+  assert.equal(C.classifyDefer({ id:"5", recurring:false, due:"", labels:[] }), "tomorrow-undated");
+  assert.equal(C.classifyDefer({ id:"6", recurring:false, due:"2026-06-10", labels:[] }, "tomorrow"), "tomorrow-dated");
+});
+
+test("classifyDefer: explicit specific-date choice -> deep-link", () => {
+  assert.equal(C.classifyDefer({ id:"7", recurring:false, due:"", labels:[] }, "specific"), "deep-link");
+  assert.equal(C.classifyDefer({ id:"8", recurring:false, due:"2026-06-10", labels:[] }, "2026-06-20"), "deep-link");
+});
+
+test("buildDeferArgs: not-today -> labels-only update (today dropped), no due_date", () => {
+  const task = { id:"100", recurring:false, due:"2026-06-10", labels:["today","energy-low"] };
+  const a = C.buildDeferArgs(task, "not-today", "2026-06-08", "req-nt");
+  assert.deepEqual(a, { tasks:[{ id:"100", labels:["energy-low"] }], requestId:"req-nt" });
+  assert.equal("due_date" in a.tasks[0], false);
+});
+
+test("buildDeferArgs: tomorrow-dated -> labels dropped + due_date today+1 (based on TODAY not stale due)", () => {
+  const overdue = { id:"101", recurring:false, due:"2026-05-01", labels:["today"] };
+  const a = C.buildDeferArgs(overdue, "tomorrow", "2026-06-08", "req-d");
+  assert.deepEqual(a, { tasks:[{ id:"101", labels:[], due_date:"2026-06-09" }], requestId:"req-d" });
+});
+
+test("buildDeferArgs: tomorrow-undated -> labels-only (queue handled by caller), no due_date", () => {
+  const task = { id:"102", recurring:false, due:"", labels:["today","15m"] };
+  const a = C.buildDeferArgs(task, "tomorrow", "2026-06-08", "req-u");
+  assert.deepEqual(a, { tasks:[{ id:"102", labels:["15m"] }], requestId:"req-u" });
+  assert.equal("due_date" in a.tasks[0], false);
+});
+
+test("buildDeferArgs: deep-link cases (recurring / specific) -> null", () => {
+  assert.equal(C.buildDeferArgs({ id:"103", recurring:true, due:"2026-06-10", labels:["today"] }, "tomorrow", "2026-06-08", "k"), null);
+  assert.equal(C.buildDeferArgs({ id:"104", recurring:false, due:"", labels:["today"] }, "specific", "2026-06-08", "k"), null);
+});

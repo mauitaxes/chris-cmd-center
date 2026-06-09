@@ -1,7 +1,7 @@
 // Netlify serverless Todoist proxy for Command Center.
 // Holds TODOIST_API_TOKEN server-side; emulates the MCP output shapes the client (app.c.js TT) expects.
 // Mirrors notion-proxy.js: exported pure helpers + dispatch({name,args,fetchImpl}) + handler.
-// Task 3 READS: find-tasks, find-activity, find-projects. Task 5 WRITES: add-tasks, complete-tasks (X-Request-Id idempotency).
+// Task 3 READS: find-tasks, find-activity, find-projects. Task 5 WRITES: add-tasks, complete-tasks. Task 6 WRITE: update-tasks (defer; X-Request-Id idempotency).
 
 const REST_BASE = "https://api.todoist.com/api/v1";  // unified v1 (REST v2 retired 2025 -> 410 Gone); paginated {results:[]} handled below
 const SYNC_BASE = "https://api.todoist.com/sync/v9";
@@ -159,6 +159,23 @@ export async function dispatch({ name, args, fetchImpl }) {
       return { tasks: out, totalCount: out.length };
     }
 
+    case "update-tasks": {
+      // Defer writes: label-only (drop "today") and/or dated snooze (+1 HST). Recurring tasks never reach here (client deep-links).
+      const tasks = Array.isArray(args.tasks) ? args.tasks : [];
+      const reqId = args.requestId || args.request_id || null;
+      const out = [];
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i] || {};
+        const body = {};
+        if (Array.isArray(t.labels)) body.labels = t.labels;        // [] is a valid write (clears all labels); only omit when undefined
+        if (t.due_date !== undefined && t.due_date !== null) body.due_date = String(t.due_date);
+        const hdr = reqId ? { "X-Request-Id": String(reqId) + (tasks.length > 1 ? ("-" + i) : "") } : {};
+        const updated = await todoistReq(f, "POST", REST_BASE + "/tasks/" + encodeURIComponent(t.id), body, hdr);
+        out.push(normalizeRestTask(updated || {}));
+      }
+      return { tasks: out, totalCount: out.length };
+    }
+
     case "complete-tasks": {
       const ids = Array.isArray(args.ids) ? args.ids : [];
       const reqId = args.requestId || args.request_id || null;
@@ -207,7 +224,7 @@ export const handler = async (event) => {
   catch (_) { return { statusCode: 400, headers, body: JSON.stringify({ error: "invalid JSON body" }) }; }
 
   const op = suffix(payload.name || "");
-  const allowed = ["find-tasks", "find-activity", "find-projects", "add-tasks", "complete-tasks"];
+  const allowed = ["find-tasks", "find-activity", "find-projects", "add-tasks", "complete-tasks", "update-tasks"];
   if (!allowed.includes(op)) {
     return { statusCode: 400, headers, body: JSON.stringify({ error: "operation not allowed" }) };
   }
