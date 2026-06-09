@@ -154,7 +154,7 @@
     var streak=+app.state.streak||0;var focus=+app.state.focusMinutesToday||0;
     var wkStr=hstDate(new Date(Date.now()-6*864e5));var winsWk=app.wins.filter(function(w){return w.date&&w.date>=wkStr;}).length;
     $("v-streak").textContent=streak;ring("g-streak",Math.min(streak,30)/30);
-    var tp=total?done/total:0;$("v-today").textContent=Math.round(tp*100)+"%";$("s-today").textContent=done+" of "+total+" tasks done";ring("g-today",tp);
+    var pg=CCData.progressGauge({plannedToday:(app.state&&app.state.plannedToday),doneCount:done,fallbackTotal:total});var tp=pg.pct;$("v-today").textContent=Math.round(tp*100)+"%";$("s-today").textContent=pg.done+" of "+pg.total+(pg.active?" planned":" tasks")+" done";ring("g-today",tp);
     var rp=st.length?sd/st.length:0;$("v-routine").textContent=Math.round(rp*100)+"%";$("s-routine").textContent=sd+" of "+st.length+" steps";ring("g-routine",rp);
     $("v-open").textContent=open;$("s-open").textContent=dueToday+" due today · "+overdue+" overdue";$("v-prio").textContent=prio;
     $("v-wins").textContent=winsWk;$("s-wins").textContent=app.wins.length?("last "+prettyDate(app.wins[0].date)):"—";
@@ -170,7 +170,9 @@
     var sn=app.state.lastStreakDate===today?"Streak secured for today":("Streak needs"+(needTask?" 1 task":"")+(needTask&&needWin?" +":"")+(needWin?" 1 win":"")+" today");
     $("mom-note").textContent=sn+" · "+open+" open ("+prio+" priority) · "+focus+" focus min";
   }
-  function renderAll(){renderSteps();renderTasks();renderTaskSections();renderRoutineEditor();renderCaps();renderWins();renderTopStats();}
+  // Task 7: read-only missed-refresh banner — the nightly job owns the write; client only reads lastRefreshDate.
+  function renderRefreshBanner(){var el=$("refresh-banner");if(!el)return;var miss=CCData.missedRefresh(app.state&&app.state.lastRefreshDate,hstDate());if(miss){el.hidden=false;el.textContent="\u26a0 Nightly refresh hasn’t run since "+prettyDate(app.state.lastRefreshDate)+" — @today, streak, and progress may be stale.";}else{el.hidden=true;}}
+  function renderAll(){renderSteps();renderTasks();renderTaskSections();renderRoutineEditor();renderCaps();renderWins();renderTopStats();renderRefreshBanner();}
 
   function tick(){var p=hstParts();$("clock").textContent=p.hour+":"+p.minute+":"+p.second;var s=(23-(+p.hour))*3600+(59-(+p.minute))*60+(59-(+p.second));var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);$("reset-countdown").textContent=String(h).padStart(2,"0")+":"+String(m).padStart(2,"0");}
 

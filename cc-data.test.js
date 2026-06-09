@@ -799,3 +799,99 @@ test("buildDeferArgs: deep-link cases (recurring / specific) -> null", () => {
   assert.equal(C.buildDeferArgs({ id:"103", recurring:true, due:"2026-06-10", labels:["today"] }, "tomorrow", "2026-06-08", "k"), null);
   assert.equal(C.buildDeferArgs({ id:"104", recurring:false, due:"", labels:["today"] }, "specific", "2026-06-08", "k"), null);
 });
+
+// ── Task 7: nightly-refresh pure helpers ──────────────────────────────────
+test("withTodayLabel: adds 'today' if absent, non-mutating; missing -> ['today']", () => {
+  const src=["15m"]; const out=C.withTodayLabel(src);
+  assert.deepEqual(out, ["15m","today"]);
+  assert.deepEqual(src, ["15m"]); // not mutated
+  assert.deepEqual(C.withTodayLabel(["today","x"]), ["today","x"]); // no dupe
+  assert.deepEqual(C.withTodayLabel(null), ["today"]);
+});
+
+test("routinePct: done/total ratio with zero flag", () => {
+  assert.deepEqual(C.routinePct([{done:true},{done:false},{done:true},{done:true}]), {done:3,total:4,pct:0.75,zero:false});
+  assert.deepEqual(C.routinePct([{done:true},{done:true}]), {done:2,total:2,pct:1,zero:false});
+  assert.deepEqual(C.routinePct([]), {done:0,total:0,pct:0,zero:true});
+  assert.deepEqual(C.routinePct(null), {done:0,total:0,pct:0,zero:true});
+});
+
+test("evaluateStreak: all 3 conditions met -> increment + secure, stamps today", () => {
+  const r=C.evaluateStreak({hasWinToday:true,completedToday:2,routinePct:0.8,routineSteps:5,streak:12,lastStreakDate:"2026-06-07",today:"2026-06-08"});
+  assert.deepEqual(r,{streak:13,lastStreakDate:"2026-06-08",secured:true,warnZeroRoutine:false});
+});
+
+test("evaluateStreak: routine below 80% -> not secured, streak unchanged", () => {
+  const r=C.evaluateStreak({hasWinToday:true,completedToday:1,routinePct:0.6,routineSteps:5,streak:12,lastStreakDate:"2026-06-07",today:"2026-06-08"});
+  assert.deepEqual(r,{streak:12,lastStreakDate:"2026-06-07",secured:false,warnZeroRoutine:false});
+});
+
+test("evaluateStreak: no win or no completion -> not secured", () => {
+  assert.equal(C.evaluateStreak({hasWinToday:false,completedToday:3,routinePct:1,routineSteps:5,streak:5,lastStreakDate:"",today:"2026-06-08"}).secured,false);
+  assert.equal(C.evaluateStreak({hasWinToday:true,completedToday:0,routinePct:1,routineSteps:5,streak:5,lastStreakDate:"",today:"2026-06-08"}).secured,false);
+});
+
+test("evaluateStreak: idempotent — already secured today does not double-increment", () => {
+  const r=C.evaluateStreak({hasWinToday:true,completedToday:2,routinePct:1,routineSteps:5,streak:13,lastStreakDate:"2026-06-08",today:"2026-06-08"});
+  assert.deepEqual(r,{streak:13,lastStreakDate:"2026-06-08",secured:true,warnZeroRoutine:false});
+});
+
+test("evaluateStreak: zero routine steps -> skip condition 3 + warn", () => {
+  const r=C.evaluateStreak({hasWinToday:true,completedToday:1,routinePct:0,routineSteps:0,streak:4,lastStreakDate:"2026-06-07",today:"2026-06-08"});
+  assert.deepEqual(r,{streak:5,lastStreakDate:"2026-06-08",secured:true,warnZeroRoutine:true});
+});
+
+test("evaluateStreak: grace day secures even if conditions unmet", () => {
+  const r=C.evaluateStreak({hasWinToday:false,completedToday:0,routinePct:0,routineSteps:5,streak:9,lastStreakDate:"2026-06-07",today:"2026-06-08",streakGraceUntil:"2026-06-08"});
+  assert.deepEqual(r,{streak:10,lastStreakDate:"2026-06-08",secured:true,warnZeroRoutine:false});
+});
+
+test("evaluateStreak: completedToday accepts boolean too", () => {
+  assert.equal(C.evaluateStreak({hasWinToday:true,completedToday:true,routinePct:1,routineSteps:3,streak:1,lastStreakDate:"",today:"2026-06-08"}).streak,2);
+});
+
+test("buildNightlyTodoistArgs: strips 'today' from @today set, adds to retag set, one batched call", () => {
+  const todayTasks=[{id:"1",labels:["today","15m"]},{id:"2",labels:["today"]}];
+  const retag=[{id:"9",labels:["energy-low"]}];
+  const a=C.buildNightlyTodoistArgs(todayTasks,retag,"req-n");
+  assert.deepEqual(a,{tasks:[{id:"1",labels:["15m"]},{id:"2",labels:[]},{id:"9",labels:["energy-low","today"]}],requestId:"req-n"});
+});
+
+test("buildNightlyTodoistArgs: id in both sets -> retag wins (today present), de-duped", () => {
+  const a=C.buildNightlyTodoistArgs([{id:"5",labels:["today","x"]}],[{id:"5",labels:["x"]}],"k");
+  assert.deepEqual(a.tasks,[{id:"5",labels:["x","today"]}]);
+});
+
+test("buildNightlyTodoistArgs: empty inputs -> empty tasks with a requestId", () => {
+  const a=C.buildNightlyTodoistArgs([],[],"k2");
+  assert.deepEqual(a,{tasks:[],requestId:"k2"});
+  assert.equal(typeof C.buildNightlyTodoistArgs(null,null).requestId,"string"); // auto key
+});
+
+test("buildNightlyStateUpdates: always clears retagTomorrow + stamps lastRefreshDate", () => {
+  const u=C.buildNightlyStateUpdates({streak:13,lastStreakDate:"2026-06-08",plannedToday:["1","2"],lastRefreshDate:"2026-06-08",progress:{done:2,total:5}});
+  assert.deepEqual(u,{retagTomorrow:[],lastRefreshDate:"2026-06-08",streak:13,lastStreakDate:"2026-06-08",plannedToday:["1","2"],progress:{done:2,total:5}});
+});
+
+test("buildNightlyStateUpdates: omits optional keys when not provided", () => {
+  const u=C.buildNightlyStateUpdates({lastRefreshDate:"2026-06-08"});
+  assert.deepEqual(u,{retagTomorrow:[],lastRefreshDate:"2026-06-08"});
+});
+
+test("progressGauge: frozen plannedToday denominator, may exceed 100%", () => {
+  assert.deepEqual(C.progressGauge({plannedToday:["a","b","c","d"],doneCount:2}),{active:true,done:2,total:4,pct:0.5});
+  const over=C.progressGauge({plannedToday:["a","b"],doneCount:3});
+  assert.equal(over.active,true); assert.equal(over.pct,1.5); // bar exceeds 100%
+});
+
+test("progressGauge: no plannedToday -> inactive, legacy fallback total", () => {
+  assert.deepEqual(C.progressGauge({doneCount:3,fallbackTotal:10}),{active:false,done:3,total:10,pct:0.3});
+  assert.deepEqual(C.progressGauge({}),{active:false,done:0,total:0,pct:0});
+});
+
+test("missedRefresh: stale prior date -> true; today or absent -> false", () => {
+  assert.equal(C.missedRefresh("2026-06-07","2026-06-08"),true);
+  assert.equal(C.missedRefresh("2026-06-08","2026-06-08"),false);
+  assert.equal(C.missedRefresh("","2026-06-08"),false);
+  assert.equal(C.missedRefresh(null,"2026-06-08"),false);
+});

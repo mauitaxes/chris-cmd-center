@@ -123,3 +123,4 @@
   .focus-intent{font-size:16px;text-align:center;width:100%;max-width:360px;}
   .focus-state{color:var(--txt-dim,#8aa);font-size:13px;}
   .focus-park{display:flex;gap:8px;width:100%;max-width:420px;margin-top:8px;}
+  .refresh-banner{margin:0 0 12px;padding:10px 14px;border-radius:8px;background:rgba(255,176,32,.12);border:1px solid rgba(255,176,32,.45);color:#ffb020;font-size:13px;font-weight:600;}

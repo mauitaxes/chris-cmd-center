@@ -442,6 +442,81 @@
     return { tasks:[t], requestId:key||idempotencyKey("defer") };
   }
 
+  // ---- Task 7: nightly-refresh pure helpers ----
+  // add "today" to a labels array if absent (non-mutating). null/undefined -> ["today"].
+  function withTodayLabel(labels){
+    var l=(Array.isArray(labels)?labels:[]).slice();
+    if(l.indexOf("today")===-1) l.push("today");
+    return l;
+  }
+  // routine completion ratio: {done,total,pct(0..1),zero}. zero===true when there are no steps.
+  function routinePct(routines){
+    var list=Array.isArray(routines)?routines:[];
+    var total=list.length;
+    var done=list.filter(function(r){return r&&r.done;}).length;
+    return { done:done, total:total, pct: total? done/total : 0, zero: total===0 };
+  }
+  // Streak rule (single source for Task 7 job + Task 8 display): increment iff Win today AND a CC task
+  // completed today AND morning routine >=80% done. Idempotent per day (lastStreakDate guard). Grace:
+  // on/before streakGraceUntil the day secures regardless (cutover). Zero routine steps -> skip
+  // condition 3 + warn. Pure; never resets the streak (break logic is a separate concern).
+  function evaluateStreak(o){
+    o=o||{};
+    var streak=+o.streak||0;
+    var today=o.today!=null?String(o.today):"";
+    var last=o.lastStreakDate!=null?String(o.lastStreakDate):"";
+    var didComplete=(typeof o.completedToday==="number")?(o.completedToday>0):!!o.completedToday;
+    var steps=+o.routineSteps||0;
+    var warnZeroRoutine=!(steps>0);
+    var routineOk=warnZeroRoutine?true:((+o.routinePct||0)>=0.8);
+    var inGrace=!!(o.streakGraceUntil&&today&&today<=String(o.streakGraceUntil));
+    var conditionsMet=(!!o.hasWinToday)&&didComplete&&routineOk;
+    var secured=conditionsMet||inGrace;
+    if(last&&last===today){ return { streak:streak, lastStreakDate:last, secured:true, warnZeroRoutine:warnZeroRoutine }; }
+    if(secured){ return { streak:streak+1, lastStreakDate:today, secured:true, warnZeroRoutine:warnZeroRoutine }; }
+    return { streak:streak, lastStreakDate:last, secured:false, warnZeroRoutine:warnZeroRoutine };
+  }
+  // Build ONE update-tasks args object for the nightly relabel:
+  //  - todayTasks (currently @today): drop "today"
+  //  - retagTasks (resolved {id,labels} for State.retagTomorrow ids): add "today"
+  // De-duped by id; retag wins (ensures "today" present) if an id appears in both. The proxy writes
+  // labels wholesale, so retagTasks MUST carry each task's current labels. Returns {tasks,requestId}.
+  function buildNightlyTodoistArgs(todayTasks, retagTasks, key){
+    var byId={}, order=[];
+    function put(id,labels){ id=String(id); if(byId[id]===undefined) order.push(id); byId[id]=labels; }
+    (Array.isArray(todayTasks)?todayTasks:[]).forEach(function(t){ if(t&&t.id!=null) put(t.id, withoutTodayLabel(t.labels)); });
+    (Array.isArray(retagTasks)?retagTasks:[]).forEach(function(t){ if(t&&t.id!=null) put(t.id, withTodayLabel(t.labels)); });
+    var tasks=order.map(function(id){ return { id:id, labels:byId[id] }; });
+    return { tasks:tasks, requestId:key||idempotencyKey("nightly") };
+  }
+  // Single merged State patch for the nightly job. Always clears retagTomorrow and stamps lastRefreshDate.
+  // streak/lastStreakDate/plannedToday/progress included only when provided. Pure.
+  function buildNightlyStateUpdates(o){
+    o=o||{};
+    var out={ retagTomorrow:[], lastRefreshDate:(o.lastRefreshDate!=null?String(o.lastRefreshDate):"") };
+    if(o.streak!==undefined) out.streak=o.streak;
+    if(o.lastStreakDate!==undefined) out.lastStreakDate=o.lastStreakDate;
+    if(Array.isArray(o.plannedToday)) out.plannedToday=o.plannedToday.map(String);
+    if(o.progress&&typeof o.progress==="object") out.progress=o.progress;
+    return out;
+  }
+  // Client gauge: frozen-denominator Today's Progress. When plannedToday[] is present & non-empty,
+  // total=plannedToday.length (frozen at last refresh) and the bar may exceed 100% (forward-only,
+  // never retreats). Otherwise active:false -> caller keeps legacy done/total behavior. Pure.
+  function progressGauge(o){
+    o=o||{};
+    var planned=Array.isArray(o.plannedToday)?o.plannedToday:[];
+    var done=+o.doneCount||0;
+    if(!planned.length){ var ft=+o.fallbackTotal||0; return { active:false, done:done, total:ft, pct: ft? done/ft : 0 }; }
+    return { active:true, done:done, total:planned.length, pct: done/planned.length };
+  }
+  // True when the nightly refresh appears missed: a prior lastRefreshDate exists and != today.
+  // (Absent lastRefreshDate -> false, so brand-new/snapshot state doesn't nag.) Pure.
+  function missedRefresh(lastRefreshDate, today){
+    var l=lastRefreshDate!=null?String(lastRefreshDate):"";
+    return !!l && l!==String(today==null?"":today);
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -487,7 +562,14 @@
     withoutTodayLabel: withoutTodayLabel,
     tomorrowHst: tomorrowHst,
     classifyDefer: classifyDefer,
-    buildDeferArgs: buildDeferArgs
+    buildDeferArgs: buildDeferArgs,
+    withTodayLabel: withTodayLabel,
+    routinePct: routinePct,
+    evaluateStreak: evaluateStreak,
+    buildNightlyTodoistArgs: buildNightlyTodoistArgs,
+    buildNightlyStateUpdates: buildNightlyStateUpdates,
+    progressGauge: progressGauge,
+    missedRefresh: missedRefresh
   };
 });
 /*__CC_DATA_END__*/

@@ -1,3 +1,8 @@
 [build]
   publish   = "dist"
   functions = "netlify/functions"
+
+# Task 7 — nightly refresh. Cron is UTC: "0 10 * * *" = 10:00 UTC = 00:00 HST (UTC-10, no DST).
+# Declaring the schedule here avoids needing the @netlify/functions type import / a root package.json.
+[functions."nightly-refresh"]
+  schedule = "0 10 * * *"
