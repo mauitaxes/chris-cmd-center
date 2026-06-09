@@ -941,6 +941,110 @@
     return !!l && l!==String(today==null?"":today);
   }
 
+  // ---- Task 9: offline-queue helpers for Todoist writes (pure; minted-once idempotency) ----
+  // Stamp a stable key onto a queued Todoist quick-add op. Key minted by idempotencyKey if absent,
+  // PRESERVED if already present (so every retry carries the SAME requestId -> X-Request-Id dedupe).
+  // Empty title -> null (nothing to queue). area defaults to "" (global Quick Capture -> Inbox).
+  function queueTodoistAdd(o){
+    o=o||{};
+    var title=(o.title||"").trim();
+    if(!title) return null;
+    return { t:"tdAdd", key:o.key||idempotencyKey("add"), title:title, area:o.area||"" };
+  }
+  // Stamp a stable key onto a queued Todoist check-off op. Missing id -> null. Key preserved if present.
+  function queueTodoistDone(o){
+    o=o||{};
+    if(o.id==null||o.id==="") return null;
+    return { t:"tdDone", key:o.key||idempotencyKey("done"), id:String(o.id) };
+  }
+  // Defensive de-dupe: collapse queued ops that share a `key` (a double-enqueue must not double-create).
+  // Order-preserving; keeps the FIRST op per key. Ops without a key (other op types) always pass through.
+  function dedupeQueueByKey(pending){
+    var out=[], seen={}, i, op, k;
+    if(!Array.isArray(pending)) return out;
+    for(i=0;i<pending.length;i++){
+      op=pending[i];
+      k=op&&op.key;
+      if(k==null||k===""){ out.push(op); continue; }
+      if(seen[k]) continue;
+      seen[k]=true; out.push(op);
+    }
+    return out;
+  }
+  // Map a queued Todoist op -> { name, args } for replay, reusing the SAME op.key so the requestId is
+  // identical on every flush. name is the MCP op suffix ("add-tasks"/"complete-tasks"). Empty title or
+  // unknown op type -> null (no-op). todoistProjects drives area->project (unknown/global -> Inbox).
+  function todoistFlushCall(op, todoistProjects){
+    op=op||{};
+    if(op.t==="tdAdd"){
+      var args=buildQuickAddArgs(op.title, op.area, todoistProjects, op.key);
+      if(!args) return null;                       // empty title -> nothing to flush
+      return { name:"add-tasks", args:args };
+    }
+    if(op.t==="tdDone"){
+      if(op.id==null||op.id==="") return null;
+      return { name:"complete-tasks", args:buildCompleteArgs(op.id, op.key) };
+    }
+    return null;
+  }
+
+  // ---- Task 10: refresh/poll scheduling + in-session staleness (pure, testable) ----
+  // Parse a Retry-After header value -> ms to wait. Integer delta-seconds OR HTTP-date. Missing/invalid -> 0.
+  function parseRetryAfter(value, nowMs){
+    if(value==null) return 0;
+    var v=String(value).trim();
+    if(v==="") return 0;
+    if(/^\d+$/.test(v)) return parseInt(v,10)*1000;
+    var t=Date.parse(v);
+    if(isNaN(t)) return 0;
+    var now=(typeof nowMs==="number")?nowMs:Date.now();
+    return Math.max(0, t-now);
+  }
+  // Recognize a 429 (rate limit) from a status number OR an error/message string (client bridge fallback).
+  function is429(x){
+    if(x===429) return true;
+    if(x==null) return false;
+    if(typeof x==="number") return x===429;
+    var s=String((x&&x.message)||x);
+    return /(^|[^0-9])429([^0-9]|$)/.test(s) || /too many requests/i.test(s) || /rate.?limit/i.test(s);
+  }
+  // Exponential backoff for N consecutive failures. failures<=0 -> 0. base*factor^(failures-1), capped at max.
+  function backoffDelay(failures, opts){
+    opts=opts||{};
+    var n=+failures||0; if(n<=0) return 0;
+    var base=opts.base||5000, factor=opts.factor||2, max=opts.max||300000;
+    return Math.min(base*Math.pow(factor, n-1), max);
+  }
+  // Decide ms until the next refresh from the last attempt's outcome. ok -> steady pollMs; 429 -> honor
+  // Retry-After (max'd with backoff so we never poll faster than the server allows); other error -> backoff.
+  function nextRefreshDelay(o){
+    o=o||{};
+    var pollMs=(o.pollMs!=null)?o.pollMs:180000;            // 3-min steady cadence
+    if(o.ok) return pollMs;
+    var b=backoffDelay(o.failures||1, {base:o.baseMs||5000, factor:2, max:o.maxMs||300000});
+    if(is429(o.status) || (+o.retryAfterMs||0)>0) return Math.max(+o.retryAfterMs||0, b);
+    return b;
+  }
+  // Human-friendly age from a duration in ms (pure; it's a delta, timezone-agnostic).
+  function refreshAge(ageMs){
+    var s=Math.floor((+ageMs||0)/1000);
+    if(s<5) return "just now";
+    if(s<60) return s+"s ago";
+    var m=Math.floor(s/60);
+    if(m<60) return m+"m ago";
+    return Math.floor(m/60)+"h ago";
+  }
+  // In-session staleness for the live sync indicator. No success yet -> {ageMs:null,stale:false,text:""}.
+  function refreshStatus(o){
+    o=o||{};
+    if(!o.lastSuccessTs) return { ageMs:null, stale:false, text:"" };
+    var now=(typeof o.now==="number")?o.now:Date.now();
+    var age=Math.max(0, now-o.lastSuccessTs);
+    var staleAfter=(o.staleAfterMs!=null)?o.staleAfterMs:600000;   // 10-min stale threshold
+    var stale=age>=staleAfter;
+    return { ageMs:age, stale:stale, text:(stale?"stale · ":"")+"updated "+refreshAge(age) };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -983,6 +1087,10 @@
     buildQuickAddArgs: buildQuickAddArgs,
     buildCompleteArgs: buildCompleteArgs,
     optimisticRemove: optimisticRemove,
+    queueTodoistAdd: queueTodoistAdd,
+    queueTodoistDone: queueTodoistDone,
+    dedupeQueueByKey: dedupeQueueByKey,
+    todoistFlushCall: todoistFlushCall,
     withoutTodayLabel: withoutTodayLabel,
     tomorrowHst: tomorrowHst,
     classifyDefer: classifyDefer,
@@ -994,7 +1102,13 @@
     buildNightlyTodoistArgs: buildNightlyTodoistArgs,
     buildNightlyStateUpdates: buildNightlyStateUpdates,
     progressGauge: progressGauge,
-    missedRefresh: missedRefresh
+    missedRefresh: missedRefresh,
+    parseRetryAfter: parseRetryAfter,
+    is429: is429,
+    backoffDelay: backoffDelay,
+    nextRefreshDelay: nextRefreshDelay,
+    refreshAge: refreshAge,
+    refreshStatus: refreshStatus
   };
 });
 /*__CC_DATA_END__*/
@@ -1070,7 +1184,7 @@
   function lsRemove(op){var o=lsGet();o.pending=(o.pending||[]).filter(function(p){return JSON.stringify(p)!==JSON.stringify(op);});lsSet(o);}
   // ---- localStorage data cache: last-known-good live dataset, so phone/home boot instantly with real data ----
   var CACHEKEY="cc_v130_cache";
-  function cacheSave(){try{localStorage.setItem(CACHEKEY,JSON.stringify({v:"1.3.0",ts:Date.now(),state:app.state,tasks:app.tasks,routines:app.routines,wins:app.wins,caps:app.caps}));}catch(e){}}
+  function cacheSave(){try{localStorage.setItem(CACHEKEY,JSON.stringify({v:"1.4.0",ts:Date.now(),state:app.state,tasks:app.tasks,routines:app.routines,wins:app.wins,caps:app.caps,todoistTasks:app.todoistTasks,todoistTiles:app.todoistTiles,todoistPanel:app.todoistPanel,todoistInbox:app.todoistInbox,todoistCompletedToday:app.todoistCompletedToday,calendarEvents:app.calendarEvents}));}catch(e){}}
   function cacheLoad(){try{var o=JSON.parse(localStorage.getItem(CACHEKEY)||"null");return (o&&o.tasks&&o.state)?o:null;}catch(e){return null;}}
 
   // ---- v1.5.0 daily report: localStorage guard + Capture-DB append ----
@@ -1102,6 +1216,9 @@
 
   // ---- bridge ----
   var DIAG={last:null,name:"",err:""};
+  // Task 10: net-health tracker. Loaders swallow per-call errors, so the poll watches r429 to back off.
+  var NET={r429:0, retryAfterMs:0};
+  try{ window.__ccNet=NET; }catch(e){}
   function hasBridge(){return !!(window.cowork&&typeof window.cowork.callMcpTool==="function");}
   var PROXY_URL="/.netlify/functions/notion-proxy";
   var TODOIST_PROXY_URL="/.netlify/functions/todoist-proxy";
@@ -1110,12 +1227,17 @@
     if(!hasBridge()){
       try{
         var resp=await fetch(proxyUrlFor(name),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
-        if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}throw new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));}
-        var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return j;
+        if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}
+          var er=new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));
+          er.status=resp.status;                                  // Task 10: surface 429 + Retry-After to the poll loop
+          try{ er.retryAfterMs=CCData.parseRetryAfter((resp.headers&&resp.headers.get)?resp.headers.get("Retry-After"):null); }catch(_h){}
+          if(resp.status===429){ NET.r429++; NET.retryAfterMs=er.retryAfterMs||0; }
+          throw er;}
+        var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";NET.r429=0;NET.retryAfterMs=0;window.__ccDiag=DIAG;return j;
       }catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
     }
-    try{var r=await window.cowork.callMcpTool(name,args);DIAG.last=r;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return r;}
-    catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
+    try{var r=await window.cowork.callMcpTool(name,args);DIAG.last=r;DIAG.name=name;DIAG.err="";NET.r429=0;window.__ccDiag=DIAG;return r;}
+    catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;if(CCData.is429(e))NET.r429++;window.__ccDiag=DIAG;throw e;}
   }
   function waitBridge(ms){return new Promise(function(res){var waited=0,step=250;if(hasBridge())return res(true);var iv=setInterval(function(){waited+=step;if(hasBridge()){clearInterval(iv);res(true);}else if(waited>=ms){clearInterval(iv);res(false);}},step);});}
   function showDiag(){
@@ -1211,7 +1333,7 @@
     app.caps=caps;
   }
   async function flushPending(){
-    var o=lsGet();var p=o.pending||[];if(!p.length)return 0;
+    var o=lsGet();var p=CCData.dedupeQueueByKey(o.pending||[]);if(!p.length)return 0;
     var failed=[];
     for(var i=0;i<p.length;i++){var op=p[i];try{
       if(op.t==="task")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Done:op.done?"__YES__":"__NO__"}});
@@ -1237,6 +1359,12 @@
       else if(op.t==="capDel")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Processed:"__YES__"}});
       else if(op.t==="report")await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:"[Daily Report "+op.date+"]",Notes:op.txt,Processed:"__YES__","date:Captured:start":op.date}}]});
       else if(op.t==="state")await writeStateNow(op.updates);
+      else if(op.t==="tdAdd"||op.t==="tdDone"){
+        // Task 9: replay Todoist write carrying the SAME op.key -> proxy lifts requestId into
+        // X-Request-Id -> Todoist de-dupes, so a reconnect flush never creates duplicates.
+        var fc=CCData.todoistFlushCall(op,(app.state&&app.state.todoistProjects)||{});
+        if(fc)await call(fc.name==="complete-tasks"?TT.complete:TT.quickAdd, fc.args);
+      }
     }catch(e){failed.push(op);}}
     var o2=lsGet();o2.pending=failed;lsSet(o2);
     return failed.length;
@@ -1385,6 +1513,24 @@
     return app.todoistInbox;
   }
 
+  // ---- Task 10: completed-today (display-only). Activity log is the source of truth — recurring
+  // completions appear here but NOT in find-completed-tasks (CP3 spike). Counts CC-tree projects only. ----
+  async function loadTodoistCompletedToday(){
+    var map=areaByProjectId(), ids=Object.keys(map), all=[], i, j;
+    var w=CCData.hstDayUtcWindow(hstDate())||{};
+    for(i=0;i<ids.length;i++){
+      try{
+        var r=await call(TT.findActivity,{projectId:ids[i],objectType:"item",eventType:"completed",limit:100});
+        var o=(r&&r.events)?r:(toObj(r)||{});
+        var evs=(o&&o.events)||[];
+        for(j=0;j<evs.length;j++) all.push(evs[j]);
+      }catch(e){ DIAG.err=String((e&&e.message)||e); }
+    }
+    app.todoistCompletedToday=CCData.completedInTreeOnDay(all, ids, w.since, w.until).length;
+    return app.todoistCompletedToday;
+  }
+  try{ window.__ccLoadCompleted=loadTodoistCompletedToday; }catch(e){}
+
   // ---- 3b/3d render (read-only; no data-act so the global toggle handler never fires) ----
   function tdRowHtml(t){
     var today=hstDate(), due=String(t.due||"").slice(0,10);
@@ -1417,7 +1563,7 @@
     }
     host.innerHTML=rows+over;
     var cc=$("td-today-count");
-    if(cc) cc.textContent=panel.today.length+" today · "+panel.overdueCount+" overdue";
+    if(cc) cc.textContent=panel.today.length+" today · "+panel.overdueCount+" overdue"+(app.todoistCompletedToday!=null?(" · "+app.todoistCompletedToday+" done today"):"");
     var oi=host.querySelector(".td-open-inbox");
     if(oi) oi.addEventListener("click",openTodoistInbox);
   }
@@ -1452,9 +1598,13 @@
       await call(TT.complete, CCData.buildCompleteArgs(id, key));
       return {ok:true, id:String(id), key:key};
     }catch(e){
-      tdRepaintFrom(snapshot);                          // rollback
+      // Task 9: durably queue the check-off (SAME key -> X-Request-Id dedupe on flush) instead of
+      // losing it. Keep the optimistic removal: the row stays gone, the op flushes on reconnect.
       DIAG.err=String((e&&e.message)||e);
-      return {ok:false, id:String(id), key:key, error:DIAG.err};
+      var qd=CCData.queueTodoistDone({id:id, key:key});
+      if(qd){ lsPush(qd); noteQueued(); }
+      else { tdRepaintFrom(snapshot); }                 // no id to queue -> roll back as before
+      return {ok:false, id:String(id), key:key, queued:!!qd, error:DIAG.err};
     }
   }
   // Quick-add: area -> its sub-project, global -> Inbox (routing in CCData.buildQuickAddArgs).
@@ -1471,8 +1621,12 @@
       var created=(o&&o.tasks&&o.tasks[0])||null;
       return {ok:true, projectId:args.tasks[0].projectId, id:created&&created.id, key:key};
     }catch(e){
+      // Task 9: durably queue the capture (SAME key -> X-Request-Id dedupe on flush). Global/unknown
+      // area routes to Inbox via buildQuickAddArgs at flush time. Empty title can't reach here.
       DIAG.err=String((e&&e.message)||e);
-      return {ok:false, key:key, error:DIAG.err};
+      var qa=CCData.queueTodoistAdd({title:title, area:area, key:key});
+      if(qa){ lsPush(qa); noteQueued(); }
+      return {ok:false, key:key, queued:!!qa, error:DIAG.err};
     }
   }
   // ---- Task 6 WRITE: 3-way defer. Same optimistic+rollback shape as tdCheckOff. Recurring/specific-date
@@ -1582,9 +1736,12 @@
     renderTodoistToday();
     await loadTodoistInbox();
     renderInboxChip();
+    try{ await loadTodoistCompletedToday(); }catch(e){}
+    renderTodoistToday();                 // repaint count line with "N done today"
     try{ await loadCalendar(); }
     catch(e){ app.calendarEvents=[]; }
     renderScheduleToday();
+    try{ if(typeof cacheSave==="function") cacheSave(); }catch(e){}   // Task 10: cache read-only panels for instant reloads
     return app.todoistTiles;
   }
   try{ window.__ccLoadTodoistPanels=loadTodoistAndCalendar; }catch(e){}
@@ -1786,7 +1943,14 @@
     var today=hstDate();var open=app.tasks.filter(function(t){return !t.done;});var prio=open.filter(function(t){return t.priority;});
     var st=steps().filter(function(r){return !r.done;});
     var lines=[];lines.push("Good morning. Here's your "+today+" brief.");lines.push("");
-    lines.push("Streak: "+(+app.state.streak||0)+" days. "+(app.state.lastStreakDate===today?"Secured today.":"Complete 1 task + log 1 win to keep it."));
+    // Task 9 (§3d honesty): seed the brief with the REAL 3-condition streak rule (win + task +
+    // routine ≥80%) via the same CCData.streakStatus the dashboard uses, so brief and dashboard never disagree.
+    var bRpc=CCData.routinePct(steps());
+    var bComp=(app.state.lastCompleted===today)?1:((app.state.progress&&app.state.progress.date===today)?(+app.state.progress.completedToday||0):0);
+    var bSs=CCData.streakStatus({hasWinToday:app.state.lastWinDate===today,completedToday:bComp,routinePct:bRpc.pct,routineSteps:bRpc.total,lastStreakDate:app.state.lastStreakDate,today:today,streakGraceUntil:app.state.streakGraceUntil});
+    var bNEED={win:"1 win",task:"1 task",routine:"routine ≥80%"};
+    var bKeep=bSs.secured?"Secured today.":("To keep it: "+bSs.needs.map(function(k){return bNEED[k];}).join(" + ")+(bSs.warnZeroRoutine?" (routine has no steps)":"")+".");
+    lines.push("Streak: "+(+app.state.streak||0)+" days. "+bKeep);
     if(st.length){lines.push("");lines.push("Morning routine left: "+st.map(function(r){return r.name;}).join(", "));}
     lines.push("");lines.push("Tasks: "+open.length+" open, "+prio.length+" priority.");
     if(prio.length){lines.push("");lines.push("Priority first:");prio.slice(0,5).forEach(function(t){lines.push("  ★ "+t.title);});}
@@ -1835,6 +1999,7 @@
     $("btn-brief").addEventListener("click",openBrief);$("btn-fullbrief").addEventListener("click",openBrief);
     $("btn-sync").addEventListener("click",function(){boot(true);});
     $("badge-ver").addEventListener("click",showDiag);
+    document.addEventListener("visibilitychange",function(){ if(document.hidden){ clearRefreshTimer(); } else { renderSyncAge(); if(app.mode==="live") pollRefresh(); } });
   }
 
   // v1.5.0: fire on load when the stored reset date != today. Instant local clear,
@@ -1867,20 +2032,61 @@
     return true;
   }
 
+  // ---- Task 10: background refresh — 3-min poll, 429 backoff (Retry-After), visibility pause, staleness ----
+  // The poll refreshes only the read-only Todoist/Calendar panels (non-disruptive); a full Notion
+  // resync stays user-initiated via the Sync button so a background tick never clobbers local edits.
+  var POLL_MS=180000;                          // 3-min steady cadence (keep sync streamlined)
+  var refreshCtl={lastSuccessTs:0,failures:0,retryAfterMs:0,timer:null,ageTimer:null,base:""};
+  function clearRefreshTimer(){ if(refreshCtl.timer){clearTimeout(refreshCtl.timer);refreshCtl.timer=null;} }
+  function renderSyncAge(){
+    if(app.mode!=="live"||!refreshCtl.lastSuccessTs) return;
+    var rs=CCData.refreshStatus({lastSuccessTs:refreshCtl.lastSuccessTs,now:Date.now(),staleAfterMs:600000});
+    var el=$("sync-status"); if(el) el.textContent=refreshCtl.base+(rs.text?(" · "+rs.text):"");
+    var p=$("pill-live"); if(p){ if(rs.stale)p.classList.add("stale"); else p.classList.remove("stale"); }
+  }
+  function scheduleNextPoll(ok,status,retryMs){
+    clearRefreshTimer();
+    if(document.hidden) return;                 // paused while tab hidden; visibility handler resumes
+    var delay=CCData.nextRefreshDelay({ok:ok,status:status,retryAfterMs:retryMs,failures:refreshCtl.failures,pollMs:POLL_MS});
+    refreshCtl.timer=setTimeout(pollRefresh,delay);
+  }
+  async function pollRefresh(){
+    if(document.hidden||app.mode!=="live"){ scheduleNextPoll(true,0,0); return; }
+    var before=NET.r429, ok=true, status=0, retryMs=0;
+    try{ await loadTodoistAndCalendar(); }catch(e){}
+    if(NET.r429>before){ ok=false; status=429; retryMs=NET.retryAfterMs||0; refreshCtl.failures++; refreshCtl.retryAfterMs=retryMs; }
+    else { refreshCtl.lastSuccessTs=Date.now(); refreshCtl.failures=0; refreshCtl.retryAfterMs=0; try{cacheSave();}catch(_c){} }
+    renderSyncAge();
+    scheduleNextPoll(ok,status,retryMs);
+  }
+  function startPolling(baseMsg){
+    if(baseMsg!=null) refreshCtl.base=baseMsg;
+    refreshCtl.lastSuccessTs=Date.now(); refreshCtl.failures=0; refreshCtl.retryAfterMs=0;
+    clearRefreshTimer();
+    if(refreshCtl.ageTimer)clearInterval(refreshCtl.ageTimer);
+    refreshCtl.ageTimer=setInterval(renderSyncAge,30000);   // tick the "updated Xm ago" label
+    scheduleNextPoll(true,0,0);
+    renderSyncAge();
+  }
+  try{ window.__ccPoll=pollRefresh; }catch(e){}
+
   async function boot(isResync){
     $("today-date").textContent=prettyDate(hstDate())+" "+new Date().getFullYear();
     loadSnapshot();
     var _cached=cacheLoad();
-    if(_cached){app.state=_cached.state;app.tasks=_cached.tasks;app.routines=_cached.routines;app.wins=_cached.wins;app.caps=_cached.caps||[];applyLocal();}
+    if(_cached){app.state=_cached.state;app.tasks=_cached.tasks;app.routines=_cached.routines;app.wins=_cached.wins;app.caps=_cached.caps||[];applyLocal();
+      if(_cached.todoistPanel){app.todoistTasks=_cached.todoistTasks||[];app.todoistTiles=_cached.todoistTiles||null;app.todoistPanel=_cached.todoistPanel;app.todoistInbox=(_cached.todoistInbox!=null?_cached.todoistInbox:null);app.todoistCompletedToday=(_cached.todoistCompletedToday!=null?_cached.todoistCompletedToday:null);app.calendarEvents=_cached.calendarEvents||null;
+        try{ if(typeof renderTodoistToday==="function"){ renderTodoistToday(); renderScheduleToday(); renderInboxChip(); } }catch(e){}}
+    }
     renderAll();
     setSync("snap",_cached?("cached data · checking live link…"):("snapshot loaded · checking live link…"));
     var ok=await waitBridge(5000);
     // Live path works two ways: Cowork bridge (ok===true) OR the Netlify notion-proxy (no bridge).
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
-    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):""));if(isResync)toast("Synced");loadTodoistAndCalendar().catch(function(){});}
+    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();var _live=app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):"");setSync("live",_live);if(isResync)toast("Synced");loadTodoistAndCalendar().catch(function(){});startPolling(_live);}
     catch(e){
-      app.mode="snapshot";renderAll();
+      app.mode="snapshot";clearRefreshTimer();renderAll();
       var kind=CCData.classifySyncError(String((e&&e.message)||e)||DIAG.err);
       var pc=(lsGet().pending||[]).length;
       var qmsg=pc?(" · "+pc+" change"+(pc===1?"":"s")+" queued"):"";

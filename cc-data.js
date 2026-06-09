@@ -586,6 +586,63 @@
     return null;
   }
 
+  // ---- Task 10: refresh/poll scheduling + in-session staleness (pure, testable) ----
+  // Parse a Retry-After header value -> ms to wait. Integer delta-seconds OR HTTP-date. Missing/invalid -> 0.
+  function parseRetryAfter(value, nowMs){
+    if(value==null) return 0;
+    var v=String(value).trim();
+    if(v==="") return 0;
+    if(/^\d+$/.test(v)) return parseInt(v,10)*1000;
+    var t=Date.parse(v);
+    if(isNaN(t)) return 0;
+    var now=(typeof nowMs==="number")?nowMs:Date.now();
+    return Math.max(0, t-now);
+  }
+  // Recognize a 429 (rate limit) from a status number OR an error/message string (client bridge fallback).
+  function is429(x){
+    if(x===429) return true;
+    if(x==null) return false;
+    if(typeof x==="number") return x===429;
+    var s=String((x&&x.message)||x);
+    return /(^|[^0-9])429([^0-9]|$)/.test(s) || /too many requests/i.test(s) || /rate.?limit/i.test(s);
+  }
+  // Exponential backoff for N consecutive failures. failures<=0 -> 0. base*factor^(failures-1), capped at max.
+  function backoffDelay(failures, opts){
+    opts=opts||{};
+    var n=+failures||0; if(n<=0) return 0;
+    var base=opts.base||5000, factor=opts.factor||2, max=opts.max||300000;
+    return Math.min(base*Math.pow(factor, n-1), max);
+  }
+  // Decide ms until the next refresh from the last attempt's outcome. ok -> steady pollMs; 429 -> honor
+  // Retry-After (max'd with backoff so we never poll faster than the server allows); other error -> backoff.
+  function nextRefreshDelay(o){
+    o=o||{};
+    var pollMs=(o.pollMs!=null)?o.pollMs:180000;            // 3-min steady cadence
+    if(o.ok) return pollMs;
+    var b=backoffDelay(o.failures||1, {base:o.baseMs||5000, factor:2, max:o.maxMs||300000});
+    if(is429(o.status) || (+o.retryAfterMs||0)>0) return Math.max(+o.retryAfterMs||0, b);
+    return b;
+  }
+  // Human-friendly age from a duration in ms (pure; it's a delta, timezone-agnostic).
+  function refreshAge(ageMs){
+    var s=Math.floor((+ageMs||0)/1000);
+    if(s<5) return "just now";
+    if(s<60) return s+"s ago";
+    var m=Math.floor(s/60);
+    if(m<60) return m+"m ago";
+    return Math.floor(m/60)+"h ago";
+  }
+  // In-session staleness for the live sync indicator. No success yet -> {ageMs:null,stale:false,text:""}.
+  function refreshStatus(o){
+    o=o||{};
+    if(!o.lastSuccessTs) return { ageMs:null, stale:false, text:"" };
+    var now=(typeof o.now==="number")?o.now:Date.now();
+    var age=Math.max(0, now-o.lastSuccessTs);
+    var staleAfter=(o.staleAfterMs!=null)?o.staleAfterMs:600000;   // 10-min stale threshold
+    var stale=age>=staleAfter;
+    return { ageMs:age, stale:stale, text:(stale?"stale · ":"")+"updated "+refreshAge(age) };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -643,7 +700,13 @@
     buildNightlyTodoistArgs: buildNightlyTodoistArgs,
     buildNightlyStateUpdates: buildNightlyStateUpdates,
     progressGauge: progressGauge,
-    missedRefresh: missedRefresh
+    missedRefresh: missedRefresh,
+    parseRetryAfter: parseRetryAfter,
+    is429: is429,
+    backoffDelay: backoffDelay,
+    nextRefreshDelay: nextRefreshDelay,
+    refreshAge: refreshAge,
+    refreshStatus: refreshStatus
   };
 });
 /*__CC_DATA_END__*/

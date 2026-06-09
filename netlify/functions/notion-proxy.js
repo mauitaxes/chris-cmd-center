@@ -170,6 +170,8 @@ async function notionReq(fetchImpl, method, path, body) {
     const msg = (data && data.message) || ("notion error " + res.status);
     const err = new Error(msg);
     err.statusCode = res.status >= 400 && res.status < 600 ? res.status : 502;
+    // Task 10: forward the upstream Retry-After (429 rate limit) so the client can honor it.
+    err.retryAfter = (res.headers && typeof res.headers.get === "function") ? res.headers.get("Retry-After") : null;
     throw err;
   }
   return data;
@@ -310,6 +312,7 @@ export const handler = async (event) => {
     return { statusCode: 200, headers, body: JSON.stringify(result) };
   } catch (e) {
     const statusCode = e.statusCode || 500;
+    if (statusCode === 429 && e.retryAfter != null) headers["Retry-After"] = String(e.retryAfter);
     return { statusCode, headers, body: JSON.stringify({ error: String(e.message || e) }) };
   }
 };

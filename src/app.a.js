@@ -70,7 +70,7 @@
   function lsRemove(op){var o=lsGet();o.pending=(o.pending||[]).filter(function(p){return JSON.stringify(p)!==JSON.stringify(op);});lsSet(o);}
   // ---- localStorage data cache: last-known-good live dataset, so phone/home boot instantly with real data ----
   var CACHEKEY="cc_v130_cache";
-  function cacheSave(){try{localStorage.setItem(CACHEKEY,JSON.stringify({v:"1.3.0",ts:Date.now(),state:app.state,tasks:app.tasks,routines:app.routines,wins:app.wins,caps:app.caps}));}catch(e){}}
+  function cacheSave(){try{localStorage.setItem(CACHEKEY,JSON.stringify({v:"1.4.0",ts:Date.now(),state:app.state,tasks:app.tasks,routines:app.routines,wins:app.wins,caps:app.caps,todoistTasks:app.todoistTasks,todoistTiles:app.todoistTiles,todoistPanel:app.todoistPanel,todoistInbox:app.todoistInbox,todoistCompletedToday:app.todoistCompletedToday,calendarEvents:app.calendarEvents}));}catch(e){}}
   function cacheLoad(){try{var o=JSON.parse(localStorage.getItem(CACHEKEY)||"null");return (o&&o.tasks&&o.state)?o:null;}catch(e){return null;}}
 
   // ---- v1.5.0 daily report: localStorage guard + Capture-DB append ----
@@ -102,6 +102,9 @@
 
   // ---- bridge ----
   var DIAG={last:null,name:"",err:""};
+  // Task 10: net-health tracker. Loaders swallow per-call errors, so the poll watches r429 to back off.
+  var NET={r429:0, retryAfterMs:0};
+  try{ window.__ccNet=NET; }catch(e){}
   function hasBridge(){return !!(window.cowork&&typeof window.cowork.callMcpTool==="function");}
   var PROXY_URL="/.netlify/functions/notion-proxy";
   var TODOIST_PROXY_URL="/.netlify/functions/todoist-proxy";
@@ -110,12 +113,17 @@
     if(!hasBridge()){
       try{
         var resp=await fetch(proxyUrlFor(name),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
-        if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}throw new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));}
-        var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return j;
+        if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}
+          var er=new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));
+          er.status=resp.status;                                  // Task 10: surface 429 + Retry-After to the poll loop
+          try{ er.retryAfterMs=CCData.parseRetryAfter((resp.headers&&resp.headers.get)?resp.headers.get("Retry-After"):null); }catch(_h){}
+          if(resp.status===429){ NET.r429++; NET.retryAfterMs=er.retryAfterMs||0; }
+          throw er;}
+        var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";NET.r429=0;NET.retryAfterMs=0;window.__ccDiag=DIAG;return j;
       }catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
     }
-    try{var r=await window.cowork.callMcpTool(name,args);DIAG.last=r;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return r;}
-    catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
+    try{var r=await window.cowork.callMcpTool(name,args);DIAG.last=r;DIAG.name=name;DIAG.err="";NET.r429=0;window.__ccDiag=DIAG;return r;}
+    catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;if(CCData.is429(e))NET.r429++;window.__ccDiag=DIAG;throw e;}
   }
   function waitBridge(ms){return new Promise(function(res){var waited=0,step=250;if(hasBridge())return res(true);var iv=setInterval(function(){waited+=step;if(hasBridge()){clearInterval(iv);res(true);}else if(waited>=ms){clearInterval(iv);res(false);}},step);});}
   function showDiag(){

@@ -252,6 +252,7 @@
     $("btn-brief").addEventListener("click",openBrief);$("btn-fullbrief").addEventListener("click",openBrief);
     $("btn-sync").addEventListener("click",function(){boot(true);});
     $("badge-ver").addEventListener("click",showDiag);
+    document.addEventListener("visibilitychange",function(){ if(document.hidden){ clearRefreshTimer(); } else { renderSyncAge(); if(app.mode==="live") pollRefresh(); } });
   }
 
   // v1.5.0: fire on load when the stored reset date != today. Instant local clear,
@@ -284,20 +285,61 @@
     return true;
   }
 
+  // ---- Task 10: background refresh — 3-min poll, 429 backoff (Retry-After), visibility pause, staleness ----
+  // The poll refreshes only the read-only Todoist/Calendar panels (non-disruptive); a full Notion
+  // resync stays user-initiated via the Sync button so a background tick never clobbers local edits.
+  var POLL_MS=180000;                          // 3-min steady cadence (keep sync streamlined)
+  var refreshCtl={lastSuccessTs:0,failures:0,retryAfterMs:0,timer:null,ageTimer:null,base:""};
+  function clearRefreshTimer(){ if(refreshCtl.timer){clearTimeout(refreshCtl.timer);refreshCtl.timer=null;} }
+  function renderSyncAge(){
+    if(app.mode!=="live"||!refreshCtl.lastSuccessTs) return;
+    var rs=CCData.refreshStatus({lastSuccessTs:refreshCtl.lastSuccessTs,now:Date.now(),staleAfterMs:600000});
+    var el=$("sync-status"); if(el) el.textContent=refreshCtl.base+(rs.text?(" · "+rs.text):"");
+    var p=$("pill-live"); if(p){ if(rs.stale)p.classList.add("stale"); else p.classList.remove("stale"); }
+  }
+  function scheduleNextPoll(ok,status,retryMs){
+    clearRefreshTimer();
+    if(document.hidden) return;                 // paused while tab hidden; visibility handler resumes
+    var delay=CCData.nextRefreshDelay({ok:ok,status:status,retryAfterMs:retryMs,failures:refreshCtl.failures,pollMs:POLL_MS});
+    refreshCtl.timer=setTimeout(pollRefresh,delay);
+  }
+  async function pollRefresh(){
+    if(document.hidden||app.mode!=="live"){ scheduleNextPoll(true,0,0); return; }
+    var before=NET.r429, ok=true, status=0, retryMs=0;
+    try{ await loadTodoistAndCalendar(); }catch(e){}
+    if(NET.r429>before){ ok=false; status=429; retryMs=NET.retryAfterMs||0; refreshCtl.failures++; refreshCtl.retryAfterMs=retryMs; }
+    else { refreshCtl.lastSuccessTs=Date.now(); refreshCtl.failures=0; refreshCtl.retryAfterMs=0; try{cacheSave();}catch(_c){} }
+    renderSyncAge();
+    scheduleNextPoll(ok,status,retryMs);
+  }
+  function startPolling(baseMsg){
+    if(baseMsg!=null) refreshCtl.base=baseMsg;
+    refreshCtl.lastSuccessTs=Date.now(); refreshCtl.failures=0; refreshCtl.retryAfterMs=0;
+    clearRefreshTimer();
+    if(refreshCtl.ageTimer)clearInterval(refreshCtl.ageTimer);
+    refreshCtl.ageTimer=setInterval(renderSyncAge,30000);   // tick the "updated Xm ago" label
+    scheduleNextPoll(true,0,0);
+    renderSyncAge();
+  }
+  try{ window.__ccPoll=pollRefresh; }catch(e){}
+
   async function boot(isResync){
     $("today-date").textContent=prettyDate(hstDate())+" "+new Date().getFullYear();
     loadSnapshot();
     var _cached=cacheLoad();
-    if(_cached){app.state=_cached.state;app.tasks=_cached.tasks;app.routines=_cached.routines;app.wins=_cached.wins;app.caps=_cached.caps||[];applyLocal();}
+    if(_cached){app.state=_cached.state;app.tasks=_cached.tasks;app.routines=_cached.routines;app.wins=_cached.wins;app.caps=_cached.caps||[];applyLocal();
+      if(_cached.todoistPanel){app.todoistTasks=_cached.todoistTasks||[];app.todoistTiles=_cached.todoistTiles||null;app.todoistPanel=_cached.todoistPanel;app.todoistInbox=(_cached.todoistInbox!=null?_cached.todoistInbox:null);app.todoistCompletedToday=(_cached.todoistCompletedToday!=null?_cached.todoistCompletedToday:null);app.calendarEvents=_cached.calendarEvents||null;
+        try{ if(typeof renderTodoistToday==="function"){ renderTodoistToday(); renderScheduleToday(); renderInboxChip(); } }catch(e){}}
+    }
     renderAll();
     setSync("snap",_cached?("cached data · checking live link…"):("snapshot loaded · checking live link…"));
     var ok=await waitBridge(5000);
     // Live path works two ways: Cowork bridge (ok===true) OR the Netlify notion-proxy (no bridge).
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
-    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):""));if(isResync)toast("Synced");loadTodoistAndCalendar().catch(function(){});}
+    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();var _live=app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):"");setSync("live",_live);if(isResync)toast("Synced");loadTodoistAndCalendar().catch(function(){});startPolling(_live);}
     catch(e){
-      app.mode="snapshot";renderAll();
+      app.mode="snapshot";clearRefreshTimer();renderAll();
       var kind=CCData.classifySyncError(String((e&&e.message)||e)||DIAG.err);
       var pc=(lsGet().pending||[]).length;
       var qmsg=pc?(" · "+pc+" change"+(pc===1?"":"s")+" queued"):"";

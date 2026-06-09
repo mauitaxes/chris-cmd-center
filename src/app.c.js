@@ -62,6 +62,24 @@
     return app.todoistInbox;
   }
 
+  // ---- Task 10: completed-today (display-only). Activity log is the source of truth — recurring
+  // completions appear here but NOT in find-completed-tasks (CP3 spike). Counts CC-tree projects only. ----
+  async function loadTodoistCompletedToday(){
+    var map=areaByProjectId(), ids=Object.keys(map), all=[], i, j;
+    var w=CCData.hstDayUtcWindow(hstDate())||{};
+    for(i=0;i<ids.length;i++){
+      try{
+        var r=await call(TT.findActivity,{projectId:ids[i],objectType:"item",eventType:"completed",limit:100});
+        var o=(r&&r.events)?r:(toObj(r)||{});
+        var evs=(o&&o.events)||[];
+        for(j=0;j<evs.length;j++) all.push(evs[j]);
+      }catch(e){ DIAG.err=String((e&&e.message)||e); }
+    }
+    app.todoistCompletedToday=CCData.completedInTreeOnDay(all, ids, w.since, w.until).length;
+    return app.todoistCompletedToday;
+  }
+  try{ window.__ccLoadCompleted=loadTodoistCompletedToday; }catch(e){}
+
   // ---- 3b/3d render (read-only; no data-act so the global toggle handler never fires) ----
   function tdRowHtml(t){
     var today=hstDate(), due=String(t.due||"").slice(0,10);
@@ -94,7 +112,7 @@
     }
     host.innerHTML=rows+over;
     var cc=$("td-today-count");
-    if(cc) cc.textContent=panel.today.length+" today · "+panel.overdueCount+" overdue";
+    if(cc) cc.textContent=panel.today.length+" today · "+panel.overdueCount+" overdue"+(app.todoistCompletedToday!=null?(" · "+app.todoistCompletedToday+" done today"):"");
     var oi=host.querySelector(".td-open-inbox");
     if(oi) oi.addEventListener("click",openTodoistInbox);
   }
@@ -267,9 +285,12 @@
     renderTodoistToday();
     await loadTodoistInbox();
     renderInboxChip();
+    try{ await loadTodoistCompletedToday(); }catch(e){}
+    renderTodoistToday();                 // repaint count line with "N done today"
     try{ await loadCalendar(); }
     catch(e){ app.calendarEvents=[]; }
     renderScheduleToday();
+    try{ if(typeof cacheSave==="function") cacheSave(); }catch(e){}   // Task 10: cache read-only panels for instant reloads
     return app.todoistTiles;
   }
   try{ window.__ccLoadTodoistPanels=loadTodoistAndCalendar; }catch(e){}
