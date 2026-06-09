@@ -108,7 +108,12 @@
   function hasBridge(){return !!(window.cowork&&typeof window.cowork.callMcpTool==="function");}
   var PROXY_URL="/.netlify/functions/notion-proxy";
   var TODOIST_PROXY_URL="/.netlify/functions/todoist-proxy";
-  function proxyUrlFor(name){return (name&&name.indexOf("b9779bcc-3581-4f0e-bef4-401bb840378a")>=0)?TODOIST_PROXY_URL:PROXY_URL;}
+  var CALENDAR_PROXY_URL="/.netlify/functions/calendar-proxy";
+  function proxyUrlFor(name){
+    if(name&&name.indexOf("b9779bcc-3581-4f0e-bef4-401bb840378a")>=0) return TODOIST_PROXY_URL;
+    if(name&&name.indexOf("a8aed00c-e9c0-4e6d-8e3a-64452207f54f")>=0) return CALENDAR_PROXY_URL;  // Google Calendar (read-only Schedule lane)
+    return PROXY_URL;
+  }
   async function call(name,args){
     if(!hasBridge()){
       try{

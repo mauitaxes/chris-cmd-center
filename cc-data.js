@@ -441,6 +441,11 @@
     if(cls==="tomorrow-dated") t.due_date=tomorrowHst(todayStr);
     return { tasks:[t], requestId:key||idempotencyKey("defer") };
   }
+  // Build update-tasks args to set/clear a task's priority. star ON -> "p1" (highest); OFF -> "p4" (default).
+  // Mirrors the migration's boolean<->p1/p4 mapping; the proxy inverts p1/p4 to REST 4/1. Pure.
+  function buildPriorityArgs(id, on, key){
+    return { tasks:[{ id:String(id), priority: on?"p1":"p4" }], requestId:key||idempotencyKey("prio") };
+  }
 
   // ---- Task 7: nightly-refresh pure helpers ----
   // add "today" to a labels array if absent (non-mutating). null/undefined -> ["today"].
@@ -693,6 +698,7 @@
     tomorrowHst: tomorrowHst,
     classifyDefer: classifyDefer,
     buildDeferArgs: buildDeferArgs,
+    buildPriorityArgs: buildPriorityArgs,
     withTodayLabel: withTodayLabel,
     routinePct: routinePct,
     evaluateStreak: evaluateStreak,

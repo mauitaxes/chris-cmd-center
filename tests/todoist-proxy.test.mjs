@@ -263,6 +263,18 @@ test("dispatch update-tasks: combined labels + due_date in one body", async () =
   assert.equal(body.due_date, "2026-06-09");
 });
 
+test("dispatch update-tasks: priority toggle sends inverted REST priority (p1 -> 4, p4 -> 1)", async () => {
+  const fetchImpl = mockFetch([
+    { match: (u, o) => /\/api\/v1\/tasks\/\d+$/.test(u) && o.method === "POST",
+      respond: (u, o) => ({ body: { id: 321, content: "x", priority: JSON.parse(o.body).priority, labels: [], is_completed: false } }) },
+  ]);
+  await dispatch({ name: FULL("update-tasks"), args: { tasks: [{ id: "321", priority: "p1" }] }, fetchImpl });
+  assert.equal(JSON.parse(fetchImpl.calls[0].opts.body).priority, 4);   // p1 -> REST 4 (highest)
+  await dispatch({ name: FULL("update-tasks"), args: { tasks: [{ id: "321", priority: "p4" }] }, fetchImpl });
+  assert.equal(JSON.parse(fetchImpl.calls[1].opts.body).priority, 1);   // p4 -> REST 1 (default)
+  assert.equal("labels" in JSON.parse(fetchImpl.calls[0].opts.body), false); // priority-only write omits labels
+});
+
 test("dispatch update-tasks: multiple tasks get per-item X-Request-Id suffixes", async () => {
   const fetchImpl = mockFetch([
     { match: (u, o) => /\/api\/v1\/tasks\/\d+$/.test(u) && o.method === "POST",

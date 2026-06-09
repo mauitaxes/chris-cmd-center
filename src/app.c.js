@@ -86,13 +86,16 @@
     var right=(due&&due<today)?'<span class="c-red">overdue · '+esc(prettyDate(due))+'</span>'
       :(due===today)?'<span class="c-amber">today</span>'
       :due?esc(prettyDate(due)):'open';
-    var star=t.priority?'<span class="ptog on" role="img" aria-label="priority" title="Priority">★</span> ':'';
+    var star='<span class="ptog '+(t.priority?"on":"")+'" data-act="td-prio" data-id="'+esc(t.id)+'" role="button" title="Toggle priority" aria-label="Toggle priority">★</span>';
     var tag=t.area?'<span class="tag '+(AREA_TAG[t.area]||"cyan")+'">'+esc(t.area)+'</span>':'';
+    var rec=t.recurring?'<span class="tag green" title="Recurring — defer opens Todoist">↻</span>':'';
+    var deferSel='<select class="ipt td-defer-sel" data-act="td-defer" data-id="'+esc(t.id)+'" title="Defer this task" style="flex:0 0 auto;max-width:104px;cursor:pointer;font-size:11px;padding:2px 4px;">'+
+      '<option value="">Defer…</option><option value="not-today">Not today</option><option value="tomorrow">Tomorrow</option><option value="specific">Pick date ›</option></select>';
     return '<div class="ti">'+
-      '<div class="chk" aria-hidden="true" style="visibility:hidden;"></div>'+
-      '<div class="name" style="grid-column:2;">'+star+esc(t.title)+'</div>'+
+      '<div class="chk" data-act="td-check" data-id="'+esc(t.id)+'" role="button" title="Complete" aria-label="Complete" style="cursor:pointer;"></div>'+
+      '<div class="name" style="grid-column:2;">'+star+' '+esc(t.title)+'</div>'+
       '<div class="right">'+right+'</div>'+
-      (tag?'<div class="tags">'+tag+'</div>':'')+'</div>';
+      '<div class="tags">'+tag+rec+deferSel+'</div>'+'</div>';
   }
   function renderTodoistToday(){
     var host=$("td-today-list"); if(!host) return;
@@ -135,6 +138,7 @@
     app.todoistTiles=CCData.todoistTileCounts(list);
     app.todoistPanel=CCData.splitTodayPanel(list,{today:hstDate(),threshold:tdOverdueThreshold()});
     renderTodoistToday();
+    if(typeof renderTodoistSections==="function") renderTodoistSections();
   }
   // Optimistic complete: drop the row immediately, POST close, restore the snapshot on failure.
   // One idempotency key per attempt (reused on retry by the offline queue in Task 9).
@@ -165,7 +169,7 @@
     if(!args) return {ok:false, error:"empty title"};
     try{
       var r=await call(TT.quickAdd, args);
-      try{ await loadTodoistTiles(); renderTodoistToday(); }catch(e2){}
+      try{ await loadTodoistTiles(); renderTodoistToday(); renderTodoistSections(); }catch(e2){}
       var o=(r&&r.tasks)?r:(toObj(r)||{});
       var created=(o&&o.tasks&&o.tasks[0])||null;
       return {ok:true, projectId:args.tasks[0].projectId, id:created&&created.id, key:key};
@@ -279,10 +283,12 @@
   // ---- combined non-blocking loader, fired from boot()'s live success path (no cutover) ----
   async function loadTodoistAndCalendar(){
     renderTodoistToday();           // paint "Loading\u2026" immediately
+    renderTodoistSections();
     renderScheduleToday();
     try{ await loadTodoistTiles(); }
     catch(e){ app.todoistPanel={today:[],overdue:[],overdueCount:0,overdueCollapsed:false,threshold:tdOverdueThreshold()}; }
     renderTodoistToday();
+    renderTodoistSections();
     await loadTodoistInbox();
     renderInboxChip();
     try{ await loadTodoistCompletedToday(); }catch(e){}
@@ -293,4 +299,88 @@
     try{ if(typeof cacheSave==="function") cacheSave(); }catch(e){}   // Task 10: cache read-only panels for instant reloads
     return app.todoistTiles;
   }
+  // ---- Phase 2 cutover: INTERACTIVE Todoist area sections (replaces the Notion #task-sections grid).
+  // Renders app.todoistTasks grouped by the 7 CC areas with live complete / priority / defer / quick-add,
+  // all routed to the already-tested write fns (tdCheckOff / tdSetPriority / tdDefer / tdQuickAdd). ----
+  function tdSectionRowHtml(t){
+    var today=hstDate(), due=String(t.due||"").slice(0,10);
+    var right=(due&&due<today)?'<span class="c-red">overdue · '+esc(prettyDate(due))+'</span>'
+      :(due===today)?'<span class="c-amber">today</span>'
+      :due?esc(prettyDate(due)):'open';
+    var star='<span class="ptog '+(t.priority?"on":"")+'" data-act="td-prio" data-id="'+esc(t.id)+'" role="button" title="Toggle priority" aria-label="Toggle priority">★</span>';
+    var labelTags=(Array.isArray(t.labels)?t.labels:[]).filter(function(l){return l!=="today";}).slice(0,3)
+      .map(function(l){return '<span class="tag cyan">'+esc(l)+'</span>';}).join("");
+    var rec=t.recurring?'<span class="tag green" title="Recurring — defer opens Todoist">↻</span>':'';
+    var deferSel='<select class="ipt td-defer-sel" data-act="td-defer" data-id="'+esc(t.id)+'" title="Defer this task" style="flex:0 0 auto;max-width:108px;cursor:pointer;font-size:11px;padding:2px 4px;">'+
+      '<option value="">Defer…</option>'+
+      '<option value="not-today">Not today</option>'+
+      '<option value="tomorrow">Tomorrow</option>'+
+      '<option value="specific">Pick date ›</option>'+
+    '</select>';
+    return '<div class="ti">'+
+      '<div class="chk" data-act="td-check" data-id="'+esc(t.id)+'" role="button" title="Complete" aria-label="Complete" style="cursor:pointer;"></div>'+
+      '<div class="name" style="grid-column:2;">'+star+' '+esc(t.title)+'</div>'+
+      '<div class="right">'+right+'</div>'+
+      '<div class="tags">'+labelTags+rec+deferSel+'</div>'+
+    '</div>';
+  }
+  function renderTodoistSections(){
+    var host=$("task-sections"); if(!host) return;
+    var loaded=(app.todoistTiles!=null)||(Array.isArray(app.todoistTasks)&&app.todoistTasks.length>0);
+    if(!loaded){ host.innerHTML='<div class="empty">Connecting to Todoist…</div>'; return; }
+    var open=(app.todoistTasks||[]).filter(function(t){return !t.done;});
+    var groups=CCData.groupTasksByArea(open, AREAS);
+    host.innerHTML=groups.map(function(g){
+      var dot='<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--'+(AREA_TAG[g.area]||"cyan")+',#5cc8ff);margin-right:7px;vertical-align:middle;"></span>';
+      var rows=g.tasks.length?g.tasks.map(tdSectionRowHtml).join(""):'<div class="empty">No open tasks.</div>';
+      return '<div class="card" style="padding:0;">'+
+        '<div class="panel-head">'+dot+'<span class="panel-title">'+esc(g.area)+'</span><div class="spacer"></div><span class="count-chip">'+g.tasks.length+'</span></div>'+
+        '<div class="quickadd"><input class="ipt" data-td-sec-area="'+esc(g.area)+'" placeholder="+ Add to '+esc(g.area)+'…" /><button class="btn cyan" data-act="td-add-section" data-area="'+esc(g.area)+'">Add</button></div>'+
+        '<div>'+rows+'</div>'+
+      '</div>';
+    }).join("");
+  }
+  // toggle priority: optimistic in-place flip + recompute tiles/panel, revert on failure.
+  async function tdSetPriority(id){
+    var list=app.todoistTasks||[], t=null, i;
+    for(i=0;i<list.length;i++){ if(list[i] && String(list[i].id)===String(id)){ t=list[i]; break; } }
+    if(!t) return {ok:false, error:"task not found"};
+    var newOn=!t.priority, key=CCData.idempotencyKey("prio");
+    t.priority=newOn;                                  // optimistic
+    tdRepaintFrom(list);                               // recompute tiles/panel + repaint today+sections
+    try{ await call(TT.update, CCData.buildPriorityArgs(id, newOn, key)); return {ok:true, id:String(id), priority:newOn?"p1":"p4", key:key}; }
+    catch(e){ t.priority=!newOn; tdRepaintFrom(list); DIAG.err=String((e&&e.message)||e); return {ok:false, id:String(id), error:DIAG.err}; }
+  }
+  function tdSectionAdd(title, area){ title=(title||"").trim(); if(!title) return; tdQuickAdd(title, area); }
+  // bind interactive handlers on #task-sections once (guarded). Distinct td-* acts so the legacy
+  // Notion handlers (data-act="task"/"prio"/"task-add-section") never collide.
+  // Bind interactive handlers on BOTH Todoist task surfaces: the area grid (#task-sections, Tasks tab)
+  // and the Today panel (#td-today-list, Today tab). Per-host guard so re-renders never double-bind.
+  function _wireTdHost(host){
+    if(!host || host._tdWired) return; host._tdWired=true;
+    host.addEventListener("click", function(e){
+      var el=e.target.closest("[data-act]"); if(!el) return;
+      var act=el.getAttribute("data-act"), id=el.getAttribute("data-id");
+      if(act==="td-check"){ tdCheckOff(id); }
+      else if(act==="td-prio"){ tdSetPriority(id); }
+      else if(act==="td-add-section"){
+        var area=el.getAttribute("data-area");
+        var inp=host.querySelector('input[data-td-sec-area="'+area+'"]');
+        if(inp){ var v=inp.value; inp.value=""; tdSectionAdd(v, area); }
+      }
+    });
+    host.addEventListener("change", function(e){
+      var sel=e.target.closest('[data-act="td-defer"]'); if(!sel) return;
+      var id=sel.getAttribute("data-id"), choice=sel.value; sel.value="";
+      if(choice) tdDefer(id, choice);
+    });
+    host.addEventListener("keydown", function(e){
+      if(e.key!=="Enter") return;
+      var inp=e.target.closest('input[data-td-sec-area]'); if(!inp) return;
+      var area=inp.getAttribute("data-td-sec-area"), v=inp.value; inp.value=""; tdSectionAdd(v, area);
+    });
+  }
+  function wireTodoistSections(){ _wireTdHost($("task-sections")); _wireTdHost($("td-today-list")); }
+  try{ window.__ccRenderTodoistSections=renderTodoistSections; window.__ccWireTodoistSections=wireTodoistSections; }catch(e){}
+
   try{ window.__ccLoadTodoistPanels=loadTodoistAndCalendar; }catch(e){}

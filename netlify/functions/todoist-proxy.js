@@ -171,6 +171,7 @@ export async function dispatch({ name, args, fetchImpl }) {
         const body = {};
         if (Array.isArray(t.labels)) body.labels = t.labels;        // [] is a valid write (clears all labels); only omit when undefined
         if (t.due_date !== undefined && t.due_date !== null) body.due_date = String(t.due_date);
+        if (t.priority !== undefined && t.priority !== null) body.priority = mcpPriorityToRest(t.priority);  // interactive priority toggle (p1/p4 -> REST 4/1)
         const hdr = reqId ? { "X-Request-Id": String(reqId) + (tasks.length > 1 ? ("-" + i) : "") } : {};
         const updated = await todoistReq(f, "POST", REST_BASE + "/tasks/" + encodeURIComponent(t.id), body, hdr);
         out.push(normalizeRestTask(updated || {}));

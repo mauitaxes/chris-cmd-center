@@ -176,10 +176,21 @@
     var sn=ss.secured?"Streak secured for today":("Streak needs "+ss.needs.map(function(k){return NEEDLBL[k];}).join(" + ")+" today");
     if(ss.warnZeroRoutine) sn+=" \u00b7 routine has no steps";
     $("mom-note").textContent=sn+" · "+open+" open ("+prio+" priority) · "+focus+" focus min";
+    // Phase 2: when Todoist is the live task source, surface its counts in the hero task tiles so the
+    // numbers match the interactive Todoist lists (progress gauge + streak stay nightly-job driven).
+    if(app.todoistTiles){
+      var _tdToday=(app.todoistPanel&&app.todoistPanel.today)?app.todoistPanel.today.length:0;
+      var _tdOver=(app.todoistPanel&&app.todoistPanel.overdueCount)||0;
+      $("v-open").textContent=app.todoistTiles.open;
+      $("s-open").textContent=_tdToday+" due today · "+_tdOver+" overdue";
+      $("v-prio").textContent=app.todoistTiles.p1;
+      $("v-areas").textContent=app.todoistTiles.areasActive;
+      $("s-areas").textContent=Object.keys(app.todoistTiles.byArea||{}).join(" · ")||"—";
+    }
   }
   // Task 7: read-only missed-refresh banner — the nightly job owns the write; client only reads lastRefreshDate.
   function renderRefreshBanner(){var el=$("refresh-banner");if(!el)return;var miss=CCData.missedRefresh(app.state&&app.state.lastRefreshDate,hstDate());if(miss){el.hidden=false;el.textContent="\u26a0 Nightly refresh hasn’t run since "+prettyDate(app.state.lastRefreshDate)+" — @today, streak, and progress may be stale.";}else{el.hidden=true;}}
-  function renderAll(){renderSteps();renderTasks();renderTaskSections();renderRoutineEditor();renderCaps();renderWins();renderTopStats();renderRefreshBanner();}
+  function renderAll(){renderSteps();renderTasks();renderTodoistSections();renderRoutineEditor();renderCaps();renderWins();renderTopStats();renderRefreshBanner();}
 
   function tick(){var p=hstParts();$("clock").textContent=p.hour+":"+p.minute+":"+p.second;var s=(23-(+p.hour))*3600+(59-(+p.minute))*60+(59-(+p.second));var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);$("reset-countdown").textContent=String(h).padStart(2,"0")+":"+String(m).padStart(2,"0");}
 
@@ -253,6 +264,7 @@
     $("btn-sync").addEventListener("click",function(){boot(true);});
     $("badge-ver").addEventListener("click",showDiag);
     document.addEventListener("visibilitychange",function(){ if(document.hidden){ clearRefreshTimer(); } else { renderSyncAge(); if(app.mode==="live") pollRefresh(); } });
+    if(typeof wireTodoistSections==="function") wireTodoistSections();
   }
 
   // v1.5.0: fire on load when the stored reset date != today. Instant local clear,
@@ -329,7 +341,7 @@
     var _cached=cacheLoad();
     if(_cached){app.state=_cached.state;app.tasks=_cached.tasks;app.routines=_cached.routines;app.wins=_cached.wins;app.caps=_cached.caps||[];applyLocal();
       if(_cached.todoistPanel){app.todoistTasks=_cached.todoistTasks||[];app.todoistTiles=_cached.todoistTiles||null;app.todoistPanel=_cached.todoistPanel;app.todoistInbox=(_cached.todoistInbox!=null?_cached.todoistInbox:null);app.todoistCompletedToday=(_cached.todoistCompletedToday!=null?_cached.todoistCompletedToday:null);app.calendarEvents=_cached.calendarEvents||null;
-        try{ if(typeof renderTodoistToday==="function"){ renderTodoistToday(); renderScheduleToday(); renderInboxChip(); } }catch(e){}}
+        try{ if(typeof renderTodoistToday==="function"){ renderTodoistToday(); renderTodoistSections(); renderScheduleToday(); renderInboxChip(); } }catch(e){}}
     }
     renderAll();
     setSync("snap",_cached?("cached data · checking live link…"):("snapshot loaded · checking live link…"));
