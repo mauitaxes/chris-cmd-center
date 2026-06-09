@@ -376,3 +376,522 @@ test("applyOps: state op merges updates onto base", () => {
   assert.equal(s.streak, 6);
   assert.equal(s.lastCompleted, "2026-06-05");
 });
+
+// ── Task 0: D9 runtime DB-id resolution ────────────────────────────────────
+test("missingDbKeys: returns required keys absent or falsy in the map", () => {
+  const dbs = { tasks:"id-t", wins:"", routines:"id-r" };
+  assert.deepEqual(C.missingDbKeys(dbs, ["tasks","wins","routines","dailyLog"]), ["wins","dailyLog"]);
+});
+test("missingDbKeys: empty required -> empty", () => {
+  assert.deepEqual(C.missingDbKeys({tasks:"x"}, []), []);
+});
+test("missingDbKeys: null map treats all required as missing", () => {
+  assert.deepEqual(C.missingDbKeys(null, ["tasks","wins"]), ["tasks","wins"]);
+});
+test("mergeResolvedDatabases: adds resolved ids, never overwrites existing", () => {
+  const base = { tasks:"id-t" };
+  const out = C.mergeResolvedDatabases(base, { dailyLog:"id-dl", tasks:"WRONG" });
+  assert.equal(out.tasks, "id-t");
+  assert.equal(out.dailyLog, "id-dl");
+  assert.notEqual(out, base);
+});
+test("mergeResolvedDatabases: null inputs -> empty object", () => {
+  assert.deepEqual(C.mergeResolvedDatabases(null, null), {});
+});
+
+// ── Task 1: Todoist structure spec + State-payload builder ──────────────────
+test("ccTodoistSpec: parent + 7 areas + full label set", () => {
+  const s = C.ccTodoistSpec();
+  assert.equal(s.parent, "Command Center");
+  assert.deepEqual(s.areas, ["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"]);
+  assert.deepEqual(s.labels, ["today","energy-low","energy-med","energy-high","5m","15m","30m","1h","2h"]);
+});
+test("buildTodoistStatePayload: maps areas+labels to id dicts", () => {
+  const payload = C.buildTodoistStatePayload(
+    "PARENT",
+    [{name:"Finances",id:"p-fin"},{name:"Focus & Work",id:"p-foc"}],
+    [{name:"today",id:"l-today"},{name:"5m",id:"l-5m"}]
+  );
+  assert.equal(payload.todoistParentId, "PARENT");
+  assert.deepEqual(payload.todoistProjects, {"Finances":"p-fin","Focus & Work":"p-foc"});
+  assert.deepEqual(payload.todoistLabels, {"today":"l-today","5m":"l-5m"});
+});
+test("buildTodoistStatePayload: null inputs -> empty dicts", () => {
+  const payload = C.buildTodoistStatePayload(null, null, null);
+  assert.equal(payload.todoistParentId, "");
+  assert.deepEqual(payload.todoistProjects, {});
+  assert.deepEqual(payload.todoistLabels, {});
+});
+
+// ── Task 2: pure migration transforms ──────────────────────────────────────
+test("migrationIdKey: deterministic 8-char hash of a notion page id", () => {
+  const a = C.migrationIdKey("27268b77-7a95-4cd0-a94c-82bb12188b9a");
+  const b = C.migrationIdKey("27268b77-7a95-4cd0-a94c-82bb12188b9a");
+  assert.equal(a, b);
+  assert.match(a, /^[0-9a-f]{8}$/);
+  assert.notEqual(a, C.migrationIdKey("different-id"));
+});
+test("notionTaskToTodoist: maps area/priority/labels/due/notes + ccid marker", () => {
+  const task = { id:"PAGE1", title:"Pay GET tax", area:"Finances",
+                 priority:true, due:"2026-06-10", energy:"med", time:"30m", notes:"quarterly" };
+  const out = C.notionTaskToTodoist(task, {
+    parentId:"PARENT",
+    projectByArea:{"Finances":"p-fin"},
+    energyLabelMap:{low:"energy-low",med:"energy-med",high:"energy-high"},
+    timeLabelMap:{"5m":"5m","15m":"15m","30m":"30m","1h":"1h","2h":"2h"}
+  });
+  assert.equal(out.content, "Pay GET tax");
+  assert.equal(out.projectId, "p-fin");
+  assert.equal(out.priority, "p1");
+  assert.deepEqual(out.labels.sort(), ["energy-med","30m"].sort());
+  assert.equal(out.dueString, "2026-06-10");
+  assert.ok(out.description.includes("quarterly"));
+  assert.match(out.description, /\[ccid:[0-9a-f]{8}\]/);
+});
+test("notionTaskToTodoist: no area -> parent project, no priority -> p4", () => {
+  const out = C.notionTaskToTodoist({id:"P2",title:"x",area:"",priority:false}, {parentId:"PARENT",projectByArea:{}});
+  assert.equal(out.projectId, "PARENT");
+  assert.equal(out.priority, "p4");
+  assert.deepEqual(out.labels, []);
+});
+test("notionCaptureToTodoist: inbox + marker", () => {
+  const out = C.notionCaptureToTodoist({id:"CAP1",item:"call plumber",notes:""});
+  assert.equal(out.projectId, "inbox");
+  assert.equal(out.content, "call plumber");
+  assert.match(out.description, /\[ccid:[0-9a-f]{8}\]/);
+});
+test("reconcileCounts: per-key match + overall ok", () => {
+  const r = C.reconcileCounts(
+    {"Finances":3,"Focus & Work":5,"P1":2,"Inbox":4},
+    {"Finances":3,"Focus & Work":5,"P1":2,"Inbox":4}
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.rows.find(x=>x.key==="Finances").ok, true);
+});
+test("reconcileCounts: mismatch flags the row and overall", () => {
+  const r = C.reconcileCounts({"Inbox":4}, {"Inbox":3});
+  assert.equal(r.ok, false);
+  assert.equal(r.rows[0].expected, 4);
+  assert.equal(r.rows[0].actual, 3);
+  assert.equal(r.rows[0].ok, false);
+});
+
+// ---- Task 4 / CP3 recurring-completion spike helpers ----
+test("hstDayUtcWindow: HST (UTC-10) local day -> [10:00Z, next 10:00Z) window", () => {
+  const w = C.hstDayUtcWindow("2026-06-08");
+  assert.equal(w.since, "2026-06-08T10:00:00.000Z");
+  assert.equal(w.until, "2026-06-09T10:00:00.000Z");
+});
+test("hstDayUtcWindow: invalid input -> null", () => {
+  assert.equal(C.hstDayUtcWindow("nope"), null);
+  assert.equal(C.hstDayUtcWindow(""), null);
+});
+test("completedInTreeOnDay: keeps in-tree completed events inside the window (recurring incl.)", () => {
+  const w = C.hstDayUtcWindow("2026-06-08");
+  const events = [
+    // recurring spike completion, in CC Daily Routines, at 19:58Z on 2026-06-08 (real spike shape)
+    { eventType:"completed", parentProjectId:"6gqCVgp6xQ44R2V3", eventDate:"2026-06-08T19:58:53.903Z",
+      extraData:{ isRecurring:true, content:"SPIKE" } },
+    // completed but OUTSIDE the CC tree (onboarding project) -> excluded by tree filter
+    { eventType:"completed", parentProjectId:"6gq77cCq8P4J7vHm", eventDate:"2026-06-08T18:41:28.099Z" },
+    // in-tree but wrong event type -> excluded
+    { eventType:"added", parentProjectId:"6gqCVgp6xQ44R2V3", eventDate:"2026-06-08T12:00:00.000Z" },
+    // in-tree completed but BEFORE the window (previous HST day) -> excluded
+    { eventType:"completed", parentProjectId:"6gqCVgp6xQ44R2V3", eventDate:"2026-06-08T09:59:00.000Z" }
+  ];
+  const treeIds = ["6gqCVgp6xQ44R2V3","6gqCVgmmffVVc4HW","6gqCVgmmg96jc96q"];
+  const hit = C.completedInTreeOnDay(events, treeIds, w.since, w.until);
+  assert.equal(hit.length, 1);
+  assert.equal(hit[0].extraData.content, "SPIKE");
+});
+test("completedInTreeOnDay: empty / null inputs -> []", () => {
+  assert.deepEqual(C.completedInTreeOnDay(null, ["x"], "2026-06-08T10:00:00.000Z", "2026-06-09T10:00:00.000Z"), []);
+  assert.deepEqual(C.completedInTreeOnDay([{eventType:"completed",parentProjectId:"x",eventDate:"2026-06-08T12:00:00Z"}], [], "2026-06-08T10:00:00.000Z", "2026-06-09T10:00:00.000Z"), []);
+});
+
+// ---- Task 3a — client task-tile transforms ----
+test("normalizeTodoistTask: MCP task shape -> dashboard model, strips ccid/created markers", () => {
+  const raw = { id:"6gqCXQ3qG6vRFVhW", content:"McCleary Estate Return",
+    description:"[created 2026-05-30] Need to inform Donna. [ccid:1739c150]",
+    dueDate:"2026-10-05", recurring:false, priority:"p1",
+    projectId:"6gqCVgmmffVVc4HW", labels:["today"], checked:false };
+  const out = C.normalizeTodoistTask(raw, {"6gqCVgmmffVVc4HW":"Focus & Work"});
+  assert.equal(out.id, raw.id);
+  assert.equal(out.title, "McCleary Estate Return");
+  assert.equal(out.area, "Focus & Work");
+  assert.equal(out.priority, true);
+  assert.equal(out.done, false);
+  assert.equal(out.due, "2026-10-05");
+  assert.equal(out.notes, "Need to inform Donna.");
+  assert.deepEqual(out.labels, ["today"]);
+});
+test("normalizeTodoistTask: unknown project -> area ''; p4 -> false; checked -> done; no markers", () => {
+  const out = C.normalizeTodoistTask({id:"x",content:"y",priority:"p4",projectId:"zzz",checked:true,description:"plain note"}, {});
+  assert.equal(out.area, "");
+  assert.equal(out.priority, false);
+  assert.equal(out.done, true);
+  assert.equal(out.notes, "plain note");
+  assert.equal(out.due, "");
+});
+test("todoistTileCounts: open / p1 / per-area / active areas (done excluded)", () => {
+  const tasks = [
+    {area:"Finances", priority:true, done:false},
+    {area:"Finances", priority:false, done:false},
+    {area:"Focus & Work", priority:true, done:true},
+    {area:"Focus & Work", priority:false, done:false},
+  ];
+  const c = C.todoistTileCounts(tasks);
+  assert.equal(c.open, 3);
+  assert.equal(c.p1, 1);
+  assert.equal(c.areasActive, 2);
+  assert.deepEqual(c.byArea, {"Finances":2,"Focus & Work":1});
+});
+
+// ---- Task 3b — Today panel split ----
+test("splitTodayPanel: buckets today vs overdue; priority & @today join today; done excluded", () => {
+  const tasks = [
+    {id:"a", title:"Due today",   due:"2026-06-08", priority:false, labels:[], done:false},
+    {id:"b", title:"Overdue",     due:"2026-06-01", priority:false, labels:[], done:false},
+    {id:"c", title:"P1 no due",   due:"",           priority:true,  labels:[], done:false},
+    {id:"d", title:"Labelled",    due:"",           priority:false, labels:["today"], done:false},
+    {id:"e", title:"Future plain",due:"2026-12-01", priority:false, labels:[], done:false},
+    {id:"f", title:"Done overdue",due:"2026-06-01", priority:false, labels:[], done:true},
+  ];
+  const r = C.splitTodayPanel(tasks, {today:"2026-06-08", threshold:5});
+  const todayIds = r.today.map(t=>t.id).sort();
+  assert.deepEqual(todayIds, ["a","c","d"]);   // future-plain & done excluded
+  assert.deepEqual(r.overdue.map(t=>t.id), ["b"]); // done-overdue excluded
+  assert.equal(r.overdueCount, 1);
+  assert.equal(r.overdueCollapsed, false);
+});
+test("splitTodayPanel: priority sorts first, then due date asc", () => {
+  const tasks = [
+    {id:"plain", title:"z", due:"2026-06-08", priority:false, labels:[], done:false},
+    {id:"p1late",title:"a", due:"2026-06-09", priority:true,  labels:[], done:false},
+    {id:"p1nodue", title:"a", due:"",           priority:true,  labels:[], done:false},
+  ];
+  const r = C.splitTodayPanel(tasks, {today:"2026-06-08"});
+  assert.equal(r.today[0].priority, true);     // a priority leads
+  assert.equal(r.today[r.today.length-1].id, "plain"); // non-priority last
+});
+test("splitTodayPanel: overdueCollapsed true past threshold", () => {
+  const tasks = [];
+  for (let i=0;i<7;i++) tasks.push({id:"o"+i, title:"x", due:"2026-06-0"+(i+1), priority:false, labels:[], done:false});
+  const r = C.splitTodayPanel(tasks, {today:"2026-06-08", threshold:5});
+  assert.equal(r.overdueCount, 7);
+  assert.equal(r.overdueCollapsed, true);
+});
+test("splitTodayPanel: datetime due compares on date prefix (MCP path)", () => {
+  const tasks = [{id:"dt", title:"x", due:"2026-06-08T08:00:00", priority:false, labels:[], done:false}];
+  const r = C.splitTodayPanel(tasks, {today:"2026-06-08"});
+  assert.deepEqual(r.today.map(t=>t.id), ["dt"]);
+  assert.equal(r.overdueCount, 0);
+});
+test("splitTodayPanel: empty / null inputs -> empty buckets, default threshold 5", () => {
+  const r = C.splitTodayPanel(null, {today:"2026-06-08"});
+  assert.deepEqual(r.today, []);
+  assert.deepEqual(r.overdue, []);
+  assert.equal(r.threshold, 5);
+  assert.equal(r.overdueCollapsed, false);
+});
+
+// ── Group: mergeCalendarEvents (Task 3c, read-only Schedule/Calendar lane) ──
+// Helper: a normalized calendar event with sensible defaults (the shape the fetch layer produces).
+const CEV = (o) => Object.assign({start:"",end:"",title:"",allDay:false,calendarId:"cal",htmlLink:""}, o);
+
+test("mergeCalendarEvents: flattens multiple calendar arrays into one list", () => {
+  const a = [CEV({id:"1", start:"2026-06-08T09:00:00-10:00", title:"A"})];
+  const b = [CEV({id:"2", start:"2026-06-08T11:00:00-10:00", title:"B"})];
+  const r = C.mergeCalendarEvents([a, b]);
+  assert.deepEqual(r.map(e=>e.title), ["A","B"]);
+});
+
+test("mergeCalendarEvents: orders by start time ascending", () => {
+  const a = [
+    CEV({start:"2026-06-08T14:00:00-10:00", title:"afternoon"}),
+    CEV({start:"2026-06-08T08:00:00-10:00", title:"morning"}),
+  ];
+  assert.deepEqual(C.mergeCalendarEvents([a]).map(e=>e.title), ["morning","afternoon"]);
+});
+
+test("mergeCalendarEvents: de-dupes an event present in two calendars (same start+title), keeps first", () => {
+  const primary = [CEV({id:"x", calendarId:"p", start:"2026-06-08T10:00:00-10:00", title:"Standup"})];
+  const work    = [CEV({id:"y", calendarId:"w", start:"2026-06-08T10:00:00-10:00", title:"Standup"})];
+  const r = C.mergeCalendarEvents([primary, work]);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].calendarId, "p");
+});
+
+test("mergeCalendarEvents: all-day event sorts before timed events the same day", () => {
+  const a = [
+    CEV({start:"2026-06-08T08:00:00-10:00", title:"timed"}),
+    CEV({start:"2026-06-08", allDay:true, title:"holiday"}),
+  ];
+  assert.deepEqual(C.mergeCalendarEvents([a]).map(e=>e.title), ["holiday","timed"]);
+});
+
+test("mergeCalendarEvents: keeps distinct same-title events at different times", () => {
+  const a = [
+    CEV({start:"2026-06-08T09:00:00-10:00", title:"Call"}),
+    CEV({start:"2026-06-08T15:00:00-10:00", title:"Call"}),
+  ];
+  assert.equal(C.mergeCalendarEvents([a]).length, 2);
+});
+
+test("mergeCalendarEvents: empty / null / sparse inputs -> []", () => {
+  assert.deepEqual(C.mergeCalendarEvents(null), []);
+  assert.deepEqual(C.mergeCalendarEvents([]), []);
+  assert.deepEqual(C.mergeCalendarEvents([null, [], [undefined]]), []);
+});
+
+test("mergeCalendarEvents: unparseable start sorts to the end, does not throw", () => {
+  const a = [
+    CEV({start:"not-a-date", title:"junk"}),
+    CEV({start:"2026-06-08T08:00:00-10:00", title:"real"}),
+  ];
+  assert.deepEqual(C.mergeCalendarEvents([a]).map(e=>e.title), ["real","junk"]);
+});
+
+test("mergeCalendarEvents: does not mutate input arrays", () => {
+  const a = [CEV({start:"2026-06-08T14:00:00-10:00", title:"b"}), CEV({start:"2026-06-08T08:00:00-10:00", title:"a"})];
+  const snapshot = a.map(e=>e.title);
+  C.mergeCalendarEvents([a]);
+  assert.deepEqual(a.map(e=>e.title), snapshot);
+});
+
+// ── Task 5: write helpers (quick-add, idempotency, arg builders) ───────────
+test("quickAddProjectId: known area -> its projectId; unknown/global -> 'inbox'", () => {
+  const tp = {"Finances":"p-fin","Focus & Work":"p-foc"};
+  assert.equal(C.quickAddProjectId("Focus & Work", tp), "p-foc");
+  assert.equal(C.quickAddProjectId("Finances", tp), "p-fin");
+  assert.equal(C.quickAddProjectId("Nonexistent", tp), "inbox");
+  assert.equal(C.quickAddProjectId("", tp), "inbox");
+  assert.equal(C.quickAddProjectId(undefined, undefined), "inbox");
+});
+
+test("idempotencyKey: prefixed, unique per call", () => {
+  const a = C.idempotencyKey("add");
+  const b = C.idempotencyKey("add");
+  assert.match(a, /^add-/);
+  assert.notEqual(a, b);
+  assert.match(C.idempotencyKey(), /^cc-/);   // default prefix
+});
+
+test("buildQuickAddArgs: maps title+area -> MCP add-tasks args with requestId", () => {
+  const tp = {"Focus & Work":"p-foc"};
+  const args = C.buildQuickAddArgs("  Pay GET tax  ", "Focus & Work", tp, "req-1");
+  assert.deepEqual(args.tasks, [{content:"Pay GET tax", projectId:"p-foc"}]);
+  assert.equal(args.requestId, "req-1");
+});
+
+test("buildQuickAddArgs: global capture -> inbox; empty title -> null; auto key when omitted", () => {
+  assert.equal(C.buildQuickAddArgs("   ", "Focus & Work", {}, "k"), null);
+  const g = C.buildQuickAddArgs("idea", "", {});
+  assert.equal(g.tasks[0].projectId, "inbox");
+  assert.match(g.requestId, /^add-/);
+});
+
+test("buildCompleteArgs: wraps id in ids[] with requestId (auto key when omitted)", () => {
+  assert.deepEqual(C.buildCompleteArgs("111", "req-2"), {ids:["111"], requestId:"req-2"});
+  const a = C.buildCompleteArgs(222);
+  assert.deepEqual(a.ids, ["222"]);
+  assert.match(a.requestId, /^done-/);
+});
+
+test("optimisticRemove: returns a NEW array without the matching id; non-mutating; string-coerced", () => {
+  const tasks = [{id:"1",title:"a"},{id:"2",title:"b"},{id:"3",title:"c"}];
+  const next = C.optimisticRemove(tasks, 2);            // number id coerced to match "2"
+  assert.deepEqual(next.map(t=>t.id), ["1","3"]);
+  assert.equal(tasks.length, 3);                         // original untouched (rollback snapshot stays valid)
+  assert.notEqual(next, tasks);
+});
+
+test("optimisticRemove: unknown id -> shallow copy unchanged; null/empty inputs -> []", () => {
+  const tasks = [{id:"1"}];
+  const same = C.optimisticRemove(tasks, "999");
+  assert.deepEqual(same.map(t=>t.id), ["1"]);
+  assert.notEqual(same, tasks);
+  assert.deepEqual(C.optimisticRemove(null, "1"), []);
+  assert.deepEqual(C.optimisticRemove(undefined, "1"), []);
+});
+
+test("optimisticRemove: returns a NEW array without the matching id; non-mutating; string-coerced", () => {
+  const tasks = [{id:"1",title:"a"},{id:"2",title:"b"},{id:"3",title:"c"}];
+  const next = C.optimisticRemove(tasks, 2);            // number id coerced to match "2"
+  assert.deepEqual(next.map(t=>t.id), ["1","3"]);
+  assert.equal(tasks.length, 3);                         // original untouched (rollback snapshot stays valid)
+  assert.notEqual(next, tasks);
+});
+
+test("optimisticRemove: unknown id -> shallow copy unchanged; null/empty inputs -> []", () => {
+  const tasks = [{id:"1"}];
+  const same = C.optimisticRemove(tasks, "999");
+  assert.deepEqual(same.map(t=>t.id), ["1"]);
+  assert.notEqual(same, tasks);
+  assert.deepEqual(C.optimisticRemove(null, "1"), []);
+  assert.deepEqual(C.optimisticRemove(undefined, "1"), []);
+});
+
+// ── Task 6: defer pure helpers ─────────────────────────────────────────────
+test("withoutTodayLabel: drops 'today', keeps others, non-mutating; missing -> unchanged copy", () => {
+  const labels = ["today", "energy-low", "15m"];
+  const next = C.withoutTodayLabel(labels);
+  assert.deepEqual(next, ["energy-low", "15m"]);
+  assert.deepEqual(labels, ["today", "energy-low", "15m"]);
+  assert.notEqual(next, labels);
+  assert.deepEqual(C.withoutTodayLabel(["energy-low"]), ["energy-low"]);
+  assert.deepEqual(C.withoutTodayLabel(undefined), []);
+  assert.deepEqual(C.withoutTodayLabel(null), []);
+});
+
+test("tomorrowHst: returns today+1 as YYYY-MM-DD via pure date math (no local TZ)", () => {
+  assert.equal(C.tomorrowHst("2026-06-08"), "2026-06-09");
+  assert.equal(C.tomorrowHst("2026-06-30"), "2026-07-01");
+  assert.equal(C.tomorrowHst("2026-12-31"), "2027-01-01");
+  assert.equal(C.tomorrowHst("2026-02-28"), "2026-03-01");
+  assert.equal(C.tomorrowHst("garbage"), "");
+});
+
+test("classifyDefer: recurring -> deep-link regardless of choice", () => {
+  const rec = { id:"1", recurring:true, due:"2026-06-10", labels:["today"] };
+  assert.equal(C.classifyDefer(rec), "deep-link");
+  assert.equal(C.classifyDefer(rec, "not-today"), "deep-link");
+  assert.equal(C.classifyDefer(rec, "tomorrow"), "deep-link");
+});
+
+test("classifyDefer: choice 'not-today' -> not-today for non-recurring", () => {
+  assert.equal(C.classifyDefer({ id:"2", recurring:false, due:"2026-06-10", labels:["today"] }, "not-today"), "not-today");
+  assert.equal(C.classifyDefer({ id:"3", recurring:false, due:"", labels:["today"] }, "not-today"), "not-today");
+});
+
+test("classifyDefer: default/tomorrow -> dated vs undated by due presence", () => {
+  assert.equal(C.classifyDefer({ id:"4", recurring:false, due:"2026-06-10", labels:[] }), "tomorrow-dated");
+  assert.equal(C.classifyDefer({ id:"5", recurring:false, due:"", labels:[] }), "tomorrow-undated");
+  assert.equal(C.classifyDefer({ id:"6", recurring:false, due:"2026-06-10", labels:[] }, "tomorrow"), "tomorrow-dated");
+});
+
+test("classifyDefer: explicit specific-date choice -> deep-link", () => {
+  assert.equal(C.classifyDefer({ id:"7", recurring:false, due:"", labels:[] }, "specific"), "deep-link");
+  assert.equal(C.classifyDefer({ id:"8", recurring:false, due:"2026-06-10", labels:[] }, "2026-06-20"), "deep-link");
+});
+
+test("buildDeferArgs: not-today -> labels-only update (today dropped), no due_date", () => {
+  const task = { id:"100", recurring:false, due:"2026-06-10", labels:["today","energy-low"] };
+  const a = C.buildDeferArgs(task, "not-today", "2026-06-08", "req-nt");
+  assert.deepEqual(a, { tasks:[{ id:"100", labels:["energy-low"] }], requestId:"req-nt" });
+  assert.equal("due_date" in a.tasks[0], false);
+});
+
+test("buildDeferArgs: tomorrow-dated -> labels dropped + due_date today+1 (based on TODAY not stale due)", () => {
+  const overdue = { id:"101", recurring:false, due:"2026-05-01", labels:["today"] };
+  const a = C.buildDeferArgs(overdue, "tomorrow", "2026-06-08", "req-d");
+  assert.deepEqual(a, { tasks:[{ id:"101", labels:[], due_date:"2026-06-09" }], requestId:"req-d" });
+});
+
+test("buildDeferArgs: tomorrow-undated -> labels-only (queue handled by caller), no due_date", () => {
+  const task = { id:"102", recurring:false, due:"", labels:["today","15m"] };
+  const a = C.buildDeferArgs(task, "tomorrow", "2026-06-08", "req-u");
+  assert.deepEqual(a, { tasks:[{ id:"102", labels:["15m"] }], requestId:"req-u" });
+  assert.equal("due_date" in a.tasks[0], false);
+});
+
+test("buildDeferArgs: deep-link cases (recurring / specific) -> null", () => {
+  assert.equal(C.buildDeferArgs({ id:"103", recurring:true, due:"2026-06-10", labels:["today"] }, "tomorrow", "2026-06-08", "k"), null);
+  assert.equal(C.buildDeferArgs({ id:"104", recurring:false, due:"", labels:["today"] }, "specific", "2026-06-08", "k"), null);
+});
+
+// ── Task 7: nightly-refresh pure helpers ──────────────────────────────────
+test("withTodayLabel: adds 'today' if absent, non-mutating; missing -> ['today']", () => {
+  const src=["15m"]; const out=C.withTodayLabel(src);
+  assert.deepEqual(out, ["15m","today"]);
+  assert.deepEqual(src, ["15m"]); // not mutated
+  assert.deepEqual(C.withTodayLabel(["today","x"]), ["today","x"]); // no dupe
+  assert.deepEqual(C.withTodayLabel(null), ["today"]);
+});
+
+test("routinePct: done/total ratio with zero flag", () => {
+  assert.deepEqual(C.routinePct([{done:true},{done:false},{done:true},{done:true}]), {done:3,total:4,pct:0.75,zero:false});
+  assert.deepEqual(C.routinePct([{done:true},{done:true}]), {done:2,total:2,pct:1,zero:false});
+  assert.deepEqual(C.routinePct([]), {done:0,total:0,pct:0,zero:true});
+  assert.deepEqual(C.routinePct(null), {done:0,total:0,pct:0,zero:true});
+});
+
+test("evaluateStreak: all 3 conditions met -> increment + secure, stamps today", () => {
+  const r=C.evaluateStreak({hasWinToday:true,completedToday:2,routinePct:0.8,routineSteps:5,streak:12,lastStreakDate:"2026-06-07",today:"2026-06-08"});
+  assert.deepEqual(r,{streak:13,lastStreakDate:"2026-06-08",secured:true,warnZeroRoutine:false});
+});
+
+test("evaluateStreak: routine below 80% -> not secured, streak unchanged", () => {
+  const r=C.evaluateStreak({hasWinToday:true,completedToday:1,routinePct:0.6,routineSteps:5,streak:12,lastStreakDate:"2026-06-07",today:"2026-06-08"});
+  assert.deepEqual(r,{streak:12,lastStreakDate:"2026-06-07",secured:false,warnZeroRoutine:false});
+});
+
+test("evaluateStreak: no win or no completion -> not secured", () => {
+  assert.equal(C.evaluateStreak({hasWinToday:false,completedToday:3,routinePct:1,routineSteps:5,streak:5,lastStreakDate:"",today:"2026-06-08"}).secured,false);
+  assert.equal(C.evaluateStreak({hasWinToday:true,completedToday:0,routinePct:1,routineSteps:5,streak:5,lastStreakDate:"",today:"2026-06-08"}).secured,false);
+});
+
+test("evaluateStreak: idempotent — already secured today does not double-increment", () => {
+  const r=C.evaluateStreak({hasWinToday:true,completedToday:2,routinePct:1,routineSteps:5,streak:13,lastStreakDate:"2026-06-08",today:"2026-06-08"});
+  assert.deepEqual(r,{streak:13,lastStreakDate:"2026-06-08",secured:true,warnZeroRoutine:false});
+});
+
+test("evaluateStreak: zero routine steps -> skip condition 3 + warn", () => {
+  const r=C.evaluateStreak({hasWinToday:true,completedToday:1,routinePct:0,routineSteps:0,streak:4,lastStreakDate:"2026-06-07",today:"2026-06-08"});
+  assert.deepEqual(r,{streak:5,lastStreakDate:"2026-06-08",secured:true,warnZeroRoutine:true});
+});
+
+test("evaluateStreak: grace day secures even if conditions unmet", () => {
+  const r=C.evaluateStreak({hasWinToday:false,completedToday:0,routinePct:0,routineSteps:5,streak:9,lastStreakDate:"2026-06-07",today:"2026-06-08",streakGraceUntil:"2026-06-08"});
+  assert.deepEqual(r,{streak:10,lastStreakDate:"2026-06-08",secured:true,warnZeroRoutine:false});
+});
+
+test("evaluateStreak: completedToday accepts boolean too", () => {
+  assert.equal(C.evaluateStreak({hasWinToday:true,completedToday:true,routinePct:1,routineSteps:3,streak:1,lastStreakDate:"",today:"2026-06-08"}).streak,2);
+});
+
+test("buildNightlyTodoistArgs: strips 'today' from @today set, adds to retag set, one batched call", () => {
+  const todayTasks=[{id:"1",labels:["today","15m"]},{id:"2",labels:["today"]}];
+  const retag=[{id:"9",labels:["energy-low"]}];
+  const a=C.buildNightlyTodoistArgs(todayTasks,retag,"req-n");
+  assert.deepEqual(a,{tasks:[{id:"1",labels:["15m"]},{id:"2",labels:[]},{id:"9",labels:["energy-low","today"]}],requestId:"req-n"});
+});
+
+test("buildNightlyTodoistArgs: id in both sets -> retag wins (today present), de-duped", () => {
+  const a=C.buildNightlyTodoistArgs([{id:"5",labels:["today","x"]}],[{id:"5",labels:["x"]}],"k");
+  assert.deepEqual(a.tasks,[{id:"5",labels:["x","today"]}]);
+});
+
+test("buildNightlyTodoistArgs: empty inputs -> empty tasks with a requestId", () => {
+  const a=C.buildNightlyTodoistArgs([],[],"k2");
+  assert.deepEqual(a,{tasks:[],requestId:"k2"});
+  assert.equal(typeof C.buildNightlyTodoistArgs(null,null).requestId,"string"); // auto key
+});
+
+test("buildNightlyStateUpdates: always clears retagTomorrow + stamps lastRefreshDate", () => {
+  const u=C.buildNightlyStateUpdates({streak:13,lastStreakDate:"2026-06-08",plannedToday:["1","2"],lastRefreshDate:"2026-06-08",progress:{done:2,total:5}});
+  assert.deepEqual(u,{retagTomorrow:[],lastRefreshDate:"2026-06-08",streak:13,lastStreakDate:"2026-06-08",plannedToday:["1","2"],progress:{done:2,total:5}});
+});
+
+test("buildNightlyStateUpdates: omits optional keys when not provided", () => {
+  const u=C.buildNightlyStateUpdates({lastRefreshDate:"2026-06-08"});
+  assert.deepEqual(u,{retagTomorrow:[],lastRefreshDate:"2026-06-08"});
+});
+
+test("progressGauge: frozen plannedToday denominator, may exceed 100%", () => {
+  assert.deepEqual(C.progressGauge({plannedToday:["a","b","c","d"],doneCount:2}),{active:true,done:2,total:4,pct:0.5});
+  const over=C.progressGauge({plannedToday:["a","b"],doneCount:3});
+  assert.equal(over.active,true); assert.equal(over.pct,1.5); // bar exceeds 100%
+});
+
+test("progressGauge: no plannedToday -> inactive, legacy fallback total", () => {
+  assert.deepEqual(C.progressGauge({doneCount:3,fallbackTotal:10}),{active:false,done:3,total:10,pct:0.3});
+  assert.deepEqual(C.progressGauge({}),{active:false,done:0,total:0,pct:0});
+});
+
+test("missedRefresh: stale prior date -> true; today or absent -> false", () => {
+  assert.equal(C.missedRefresh("2026-06-07","2026-06-08"),true);
+  assert.equal(C.missedRefresh("2026-06-08","2026-06-08"),false);
+  assert.equal(C.missedRefresh("","2026-06-08"),false);
+  assert.equal(C.missedRefresh(null,"2026-06-08"),false);
+});

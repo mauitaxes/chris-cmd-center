@@ -1,0 +1,53 @@
+feat(task7): nightly Netlify scheduled function — streak/relabel/routine-reset/refresh
+
+Server-side nightly job that prepares each new HST day. Schedule lives in netlify.toml;
+cron "0 10 * * *" UTC = 00:00 HST (UTC-10, no DST). Read-only client wiring only — no
+cutover, nothing merged to main, production untouched.
+
+Scheduled function (netlify/functions/nightly-refresh.js):
+  - New Netlify API entrypoint (export default async (req)) + a fetch/dispatch-injectable
+    runNightly() orchestrator. Reuses BOTH proxies' dispatch (no new API plumbing) and the
+    tested cc-data pure helpers (no logic in the wiring layer).
+  - 6 ordered steps, batched for the 30s budget (ONE Todoist relabel call + ONE merged
+    State write at the end):
+      1. Evaluate + record streak. completed-today numerator via find-activity filtered to
+         the 7 CC project ids + HST window (completedInTreeOnDay) — NEVER find-completed-tasks
+         (CP3: misses recurring completions). win-today from State.lastWinDate; routine % from
+         the routines DB. Honors streakGraceUntil; zero routine steps -> skip cond. 3 + warn.
+      2. Brief/progress -> State only (lean; no Daily Log page in v1, documented fast-follow).
+      3. Clear all @today + apply retagTomorrow[] in ONE update-tasks call; then retagTomorrow
+         -> []. Recurring tasks never enter retag and are not touched.
+      4. Reset morning routine (Done Today -> __NO__).
+      5. Snapshot plannedToday[] (frozen denominator) from the post-relabel @today set.
+      6. Stamp lastRefreshDate = todayHST.
+
+Pure helpers (cc-data.js, test-first): evaluateStreak (3-condition rule + grace + zero-step
+skip, idempotent per day, never resets), routinePct, withTodayLabel, buildNightlyTodoistArgs
+(one batched relabel; retag carries current labels since the proxy writes labels wholesale;
+de-duped, retag wins), buildNightlyStateUpdates (single merged patch; always clears
+retagTomorrow + stamps lastRefreshDate), progressGauge (frozen plannedToday denominator,
+forward-only, may exceed 100%; inactive -> legacy done/total), missedRefresh.
+
+Client read-side (additive, read-only — the job owns every write):
+  - src/index.html + styles.css: #refresh-banner element + style.
+  - src/app.b.js: renderRefreshBanner() (missedRefresh on lastRefreshDate); Today's Progress
+    gauge now uses progressGauge (plannedToday[] denominator when present, else unchanged).
+
+netlify.toml: add [functions."nightly-refresh"] schedule = "0 10 * * *".
+
+Tests: +17 cc-data (streak rule incl. grace/zero-step/idempotency, relabel builder dedupe,
+state-patch, gauge >100%, missedRefresh), +2 orchestration (tests/nightly-refresh.test.mjs:
+happy path streak+13 / one batched relabel / single merged State write; sub-80% routine ->
+not secured). Full suite 184/184 green. Build clean (dist/index.html 120,666 B); every
+build input <40 KB (largest cc-data.js 28,275 B).
+
+NOT YET DONE (Chris's gate, per TASK7-START-HERE.md §3e/§5): live Netlify "Run now" on a
+Deploy Preview to confirm real Todoist relabel + routine reset + State stamp and a <30s run
+duration. No merge to main.
+
+Notes for Run-now verification:
+  - Function fires at 00:00 HST (start of new day); streak is evaluated over the todayHST
+    window per the handoff spec. Confirm the just-ended day's win/completions land in that
+    window as expected — if not, this is the only knob that may need a day-offset.
+  - progressGauge numerator is the client's existing "done" count against the frozen
+    plannedToday denominator; >100% is allowed by design.

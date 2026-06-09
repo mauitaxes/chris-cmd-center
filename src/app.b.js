@@ -154,7 +154,7 @@
     var streak=+app.state.streak||0;var focus=+app.state.focusMinutesToday||0;
     var wkStr=hstDate(new Date(Date.now()-6*864e5));var winsWk=app.wins.filter(function(w){return w.date&&w.date>=wkStr;}).length;
     $("v-streak").textContent=streak;ring("g-streak",Math.min(streak,30)/30);
-    var tp=total?done/total:0;$("v-today").textContent=Math.round(tp*100)+"%";$("s-today").textContent=done+" of "+total+" tasks done";ring("g-today",tp);
+    var pg=CCData.progressGauge({plannedToday:(app.state&&app.state.plannedToday),doneCount:done,fallbackTotal:total});var tp=pg.pct;$("v-today").textContent=Math.round(tp*100)+"%";$("s-today").textContent=pg.done+" of "+pg.total+(pg.active?" planned":" tasks")+" done";ring("g-today",tp);
     var rp=st.length?sd/st.length:0;$("v-routine").textContent=Math.round(rp*100)+"%";$("s-routine").textContent=sd+" of "+st.length+" steps";ring("g-routine",rp);
     $("v-open").textContent=open;$("s-open").textContent=dueToday+" due today · "+overdue+" overdue";$("v-prio").textContent=prio;
     $("v-wins").textContent=winsWk;$("s-wins").textContent=app.wins.length?("last "+prettyDate(app.wins[0].date)):"—";
@@ -166,11 +166,31 @@
     $("v-mom").textContent=mom;ring("g-mom",mom/100);
     var status,col;if(mom>=70){status="ON TRACK";col="c-green";}else if(mom>=40){status="BUILDING";col="c-amber";}else{status="GET STARTED";col="c-red";}
     var ms=$("mom-status");ms.textContent=status;ms.className="hero-status "+col;
-    var needTask=app.state.lastCompleted!==today,needWin=app.state.lastWinDate!==today;
-    var sn=app.state.lastStreakDate===today?"Streak secured for today":("Streak needs"+(needTask?" 1 task":"")+(needTask&&needWin?" +":"")+(needWin?" 1 win":"")+" today");
+    // Task 8: dashboard only DISPLAYS the streak status (CCData.streakStatus); the nightly job is the
+    // sole writer of streak/lastStreakDate. completedToday: prefer the responsive in-day proxy
+    // (lastCompleted===today), falling back to the nightly progress count when present.
+    var rpc=CCData.routinePct(st);
+    var compToday=(app.state.lastCompleted===today)?1:((app.state.progress&&app.state.progress.date===today)?(+app.state.progress.completedToday||0):0);
+    var ss=CCData.streakStatus({hasWinToday:app.state.lastWinDate===today,completedToday:compToday,routinePct:rpc.pct,routineSteps:rpc.total,lastStreakDate:app.state.lastStreakDate,today:today,streakGraceUntil:app.state.streakGraceUntil});
+    var NEEDLBL={win:"1 win",task:"1 task",routine:"routine \u226580%"};
+    var sn=ss.secured?"Streak secured for today":("Streak needs "+ss.needs.map(function(k){return NEEDLBL[k];}).join(" + ")+" today");
+    if(ss.warnZeroRoutine) sn+=" \u00b7 routine has no steps";
     $("mom-note").textContent=sn+" · "+open+" open ("+prio+" priority) · "+focus+" focus min";
+    // Phase 2: when Todoist is the live task source, surface its counts in the hero task tiles so the
+    // numbers match the interactive Todoist lists (progress gauge + streak stay nightly-job driven).
+    if(app.todoistTiles){
+      var _tdToday=(app.todoistPanel&&app.todoistPanel.today)?app.todoistPanel.today.length:0;
+      var _tdOver=(app.todoistPanel&&app.todoistPanel.overdueCount)||0;
+      $("v-open").textContent=app.todoistTiles.open;
+      $("s-open").textContent=_tdToday+" due today · "+_tdOver+" overdue";
+      $("v-prio").textContent=app.todoistTiles.p1;
+      $("v-areas").textContent=app.todoistTiles.areasActive;
+      $("s-areas").textContent=Object.keys(app.todoistTiles.byArea||{}).join(" · ")||"—";
+    }
   }
-  function renderAll(){renderSteps();renderTasks();renderTaskSections();renderRoutineEditor();renderCaps();renderWins();renderTopStats();}
+  // Task 7: read-only missed-refresh banner — the nightly job owns the write; client only reads lastRefreshDate.
+  function renderRefreshBanner(){var el=$("refresh-banner");if(!el)return;var miss=CCData.missedRefresh(app.state&&app.state.lastRefreshDate,hstDate());if(miss){el.hidden=false;el.textContent="\u26a0 Nightly refresh hasn’t run since "+prettyDate(app.state.lastRefreshDate)+" — @today, streak, and progress may be stale.";}else{el.hidden=true;}}
+  function renderAll(){renderSteps();renderTasks();renderTodoistSections();renderRoutineEditor();renderCaps();renderWins();renderTopStats();renderRefreshBanner();}
 
   function tick(){var p=hstParts();$("clock").textContent=p.hour+":"+p.minute+":"+p.second;var s=(23-(+p.hour))*3600+(59-(+p.minute))*60+(59-(+p.second));var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);$("reset-countdown").textContent=String(h).padStart(2,"0")+":"+String(m).padStart(2,"0");}
 
@@ -187,7 +207,14 @@
     var today=hstDate();var open=app.tasks.filter(function(t){return !t.done;});var prio=open.filter(function(t){return t.priority;});
     var st=steps().filter(function(r){return !r.done;});
     var lines=[];lines.push("Good morning. Here's your "+today+" brief.");lines.push("");
-    lines.push("Streak: "+(+app.state.streak||0)+" days. "+(app.state.lastStreakDate===today?"Secured today.":"Complete 1 task + log 1 win to keep it."));
+    // Task 9 (§3d honesty): seed the brief with the REAL 3-condition streak rule (win + task +
+    // routine ≥80%) via the same CCData.streakStatus the dashboard uses, so brief and dashboard never disagree.
+    var bRpc=CCData.routinePct(steps());
+    var bComp=(app.state.lastCompleted===today)?1:((app.state.progress&&app.state.progress.date===today)?(+app.state.progress.completedToday||0):0);
+    var bSs=CCData.streakStatus({hasWinToday:app.state.lastWinDate===today,completedToday:bComp,routinePct:bRpc.pct,routineSteps:bRpc.total,lastStreakDate:app.state.lastStreakDate,today:today,streakGraceUntil:app.state.streakGraceUntil});
+    var bNEED={win:"1 win",task:"1 task",routine:"routine ≥80%"};
+    var bKeep=bSs.secured?"Secured today.":("To keep it: "+bSs.needs.map(function(k){return bNEED[k];}).join(" + ")+(bSs.warnZeroRoutine?" (routine has no steps)":"")+".");
+    lines.push("Streak: "+(+app.state.streak||0)+" days. "+bKeep);
     if(st.length){lines.push("");lines.push("Morning routine left: "+st.map(function(r){return r.name;}).join(", "));}
     lines.push("");lines.push("Tasks: "+open.length+" open, "+prio.length+" priority.");
     if(prio.length){lines.push("");lines.push("Priority first:");prio.slice(0,5).forEach(function(t){lines.push("  ★ "+t.title);});}
@@ -236,6 +263,8 @@
     $("btn-brief").addEventListener("click",openBrief);$("btn-fullbrief").addEventListener("click",openBrief);
     $("btn-sync").addEventListener("click",function(){boot(true);});
     $("badge-ver").addEventListener("click",showDiag);
+    document.addEventListener("visibilitychange",function(){ if(document.hidden){ clearRefreshTimer(); } else { renderSyncAge(); if(app.mode==="live") pollRefresh(); } });
+    if(typeof wireTodoistSections==="function") wireTodoistSections();
   }
 
   // v1.5.0: fire on load when the stored reset date != today. Instant local clear,
@@ -268,20 +297,61 @@
     return true;
   }
 
+  // ---- Task 10: background refresh — 3-min poll, 429 backoff (Retry-After), visibility pause, staleness ----
+  // The poll refreshes only the read-only Todoist/Calendar panels (non-disruptive); a full Notion
+  // resync stays user-initiated via the Sync button so a background tick never clobbers local edits.
+  var POLL_MS=180000;                          // 3-min steady cadence (keep sync streamlined)
+  var refreshCtl={lastSuccessTs:0,failures:0,retryAfterMs:0,timer:null,ageTimer:null,base:""};
+  function clearRefreshTimer(){ if(refreshCtl.timer){clearTimeout(refreshCtl.timer);refreshCtl.timer=null;} }
+  function renderSyncAge(){
+    if(app.mode!=="live"||!refreshCtl.lastSuccessTs) return;
+    var rs=CCData.refreshStatus({lastSuccessTs:refreshCtl.lastSuccessTs,now:Date.now(),staleAfterMs:600000});
+    var el=$("sync-status"); if(el) el.textContent=refreshCtl.base+(rs.text?(" · "+rs.text):"");
+    var p=$("pill-live"); if(p){ if(rs.stale)p.classList.add("stale"); else p.classList.remove("stale"); }
+  }
+  function scheduleNextPoll(ok,status,retryMs){
+    clearRefreshTimer();
+    if(document.hidden) return;                 // paused while tab hidden; visibility handler resumes
+    var delay=CCData.nextRefreshDelay({ok:ok,status:status,retryAfterMs:retryMs,failures:refreshCtl.failures,pollMs:POLL_MS});
+    refreshCtl.timer=setTimeout(pollRefresh,delay);
+  }
+  async function pollRefresh(){
+    if(document.hidden||app.mode!=="live"){ scheduleNextPoll(true,0,0); return; }
+    var before=NET.r429, ok=true, status=0, retryMs=0;
+    try{ await loadTodoistAndCalendar(); }catch(e){}
+    if(NET.r429>before){ ok=false; status=429; retryMs=NET.retryAfterMs||0; refreshCtl.failures++; refreshCtl.retryAfterMs=retryMs; }
+    else { refreshCtl.lastSuccessTs=Date.now(); refreshCtl.failures=0; refreshCtl.retryAfterMs=0; try{cacheSave();}catch(_c){} }
+    renderSyncAge();
+    scheduleNextPoll(ok,status,retryMs);
+  }
+  function startPolling(baseMsg){
+    if(baseMsg!=null) refreshCtl.base=baseMsg;
+    refreshCtl.lastSuccessTs=Date.now(); refreshCtl.failures=0; refreshCtl.retryAfterMs=0;
+    clearRefreshTimer();
+    if(refreshCtl.ageTimer)clearInterval(refreshCtl.ageTimer);
+    refreshCtl.ageTimer=setInterval(renderSyncAge,30000);   // tick the "updated Xm ago" label
+    scheduleNextPoll(true,0,0);
+    renderSyncAge();
+  }
+  try{ window.__ccPoll=pollRefresh; }catch(e){}
+
   async function boot(isResync){
     $("today-date").textContent=prettyDate(hstDate())+" "+new Date().getFullYear();
     loadSnapshot();
     var _cached=cacheLoad();
-    if(_cached){app.state=_cached.state;app.tasks=_cached.tasks;app.routines=_cached.routines;app.wins=_cached.wins;app.caps=_cached.caps||[];applyLocal();}
+    if(_cached){app.state=_cached.state;app.tasks=_cached.tasks;app.routines=_cached.routines;app.wins=_cached.wins;app.caps=_cached.caps||[];applyLocal();
+      if(_cached.todoistPanel){app.todoistTasks=_cached.todoistTasks||[];app.todoistTiles=_cached.todoistTiles||null;app.todoistPanel=_cached.todoistPanel;app.todoistInbox=(_cached.todoistInbox!=null?_cached.todoistInbox:null);app.todoistCompletedToday=(_cached.todoistCompletedToday!=null?_cached.todoistCompletedToday:null);app.calendarEvents=_cached.calendarEvents||null;
+        try{ if(typeof renderTodoistToday==="function"){ renderTodoistToday(); renderTodoistSections(); renderScheduleToday(); renderInboxChip(); } }catch(e){}}
+    }
     renderAll();
     setSync("snap",_cached?("cached data · checking live link…"):("snapshot loaded · checking live link…"));
     var ok=await waitBridge(5000);
     // Live path works two ways: Cowork bridge (ok===true) OR the Netlify notion-proxy (no bridge).
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
-    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):""));if(isResync)toast("Synced");}
+    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();var _live=app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):"");setSync("live",_live);if(isResync)toast("Synced");loadTodoistAndCalendar().catch(function(){});startPolling(_live);}
     catch(e){
-      app.mode="snapshot";renderAll();
+      app.mode="snapshot";clearRefreshTimer();renderAll();
       var kind=CCData.classifySyncError(String((e&&e.message)||e)||DIAG.err);
       var pc=(lsGet().pending||[]).length;
       var qmsg=pc?(" · "+pc+" change"+(pc===1?"":"s")+" queued"):"";

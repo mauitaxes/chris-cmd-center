@@ -1,0 +1,51 @@
+feat(task10): refresh/sync plumbing — 3-min poll, 429 backoff, cached reads, staleness
+
+Task 10 adds background refresh on top of the existing manual Sync: a 3-min poll
+of the read-only Todoist/Calendar panels, exponential 429 backoff that honors the
+upstream Retry-After, cached reads so reloads paint last-known instantly, an
+in-session staleness indicator, and completed-today (display-only). The poll
+deliberately refreshes only the read-only external panels — a full Notion resync
+stays user-initiated via Sync so a background tick never clobbers local edits.
+The nightly job remains the sole writer of streak/progress (Task 8 discipline).
+
+cc-data.js (pure, exported) + cc-data.refresh.test.js (14 tests)
+- parseRetryAfter (delta-seconds or HTTP-date -> ms; invalid -> 0), is429
+  (status number / message / Error), backoffDelay (exp, capped), nextRefreshDelay
+  (ok -> steady pollMs; 429 -> max(Retry-After, backoff); other -> backoff),
+  refreshAge (duration -> "Nm ago"), refreshStatus (lastSuccessTs/now/threshold
+  -> {ageMs,stale,text}).
+
+netlify/functions/todoist-proxy.js + notion-proxy.js (+4 tests each suite)
+- Capture the upstream Retry-After on a non-2xx and forward it as the response
+  Retry-After header when statusCode===429. New dispatch + handler tests assert
+  the err carries statusCode/retryAfter and the handler forwards the header.
+
+src/app.a.js
+- call(): on a proxy 429, attach err.status + err.retryAfterMs (parseRetryAfter);
+  add a NET{r429,retryAfterMs} health tracker (bumped on 429, cleared on success)
+  so the poll can back off even though the panel loaders swallow per-call errors.
+- cacheSave now persists the read-only Todoist tiles/panel/inbox/completed +
+  calendar (cache v1.4.0) for instant cached reads.
+
+src/app.c.js
+- loadTodoistCompletedToday(): findActivity(completed) per CC-tree project ->
+  CCData.completedInTreeOnDay over the HST day window -> app.todoistCompletedToday
+  ("N done today" in the Today panel count line; display-only). loadTodoistAndCalendar
+  fetches it and cacheSaves the panels at the end.
+
+src/app.b.js
+- 3-min poll loop (setTimeout, not setInterval, so backoff applies) via
+  CCData.nextRefreshDelay; pauses when document.hidden and does a catch-up poll +
+  age refresh on visibilitychange; 30s ticker repaints "updated Xm ago" / "stale".
+  boot() hydrates the Todoist/Calendar panels from cache before the live link,
+  captures the live base message, and starts polling on live success; the offline
+  path clears the timer. Manual Sync (boot(true)) unchanged — still the full resync.
+
+verify: node --test 228 green (was 210: +14 refresh +4 proxy-429); proxy suite
+49 green (was 45); node cc-build.js clean (dist 134,792 B); every input < 40 KB;
+dist <script> vm-parses OK; grep confirms POLL_MS/visibilitychange/nextRefreshDelay/
+refreshStatus/loadTodoistCompletedToday/Retry-After/NET.r429 wired in dist.
+Backoff sim: steady 180s; 500-errors 5->10->20->40->80s; 429 honors Retry-After;
+recovery resets; staleness flips past 10 min. Live smoke hook: window.__ccPoll.
+
+No merge to main / no deploy yet — Phase-1 cutover handoff comes next.

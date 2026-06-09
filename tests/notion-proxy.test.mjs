@@ -382,3 +382,22 @@ test("CORS: same-origin sets Allow-Origin; cross-origin omits it", async () => {
   });
   assert.ok(!cross.headers["Access-Control-Allow-Origin"]);
 });
+
+// ---- Task 10: 429 Retry-After passthrough ----
+test("dispatch: upstream 429 throws err carrying statusCode 429 + retryAfter", async () => {
+  const fetchImpl = async () => ({ ok: false, status: 429, headers: { get: (k) => (String(k).toLowerCase() === "retry-after" ? "30" : null) }, json: async () => ({ message: "rate limited" }), text: async () => "rate limited" });
+  await assert.rejects(
+    () => dispatch({ name: FULL("notion-fetch"), args: { id: "page-1" }, fetchImpl }),
+    (e) => e.statusCode === 429 && e.retryAfter === "30"
+  );
+});
+
+test("handler: 429 forwards Retry-After response header", async () => {
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: false, status: 429, headers: { get: (k) => (String(k).toLowerCase() === "retry-after" ? "45" : null) }, json: async () => ({ message: "rate" }), text: async () => "rate" });
+  try {
+    const res = await handler({ httpMethod: "POST", headers: {}, body: JSON.stringify({ name: FULL("notion-fetch"), args: { id: "page-1" } }) });
+    assert.equal(res.statusCode, 429);
+    assert.equal(res.headers["Retry-After"], "45");
+  } finally { globalThis.fetch = orig; }
+});

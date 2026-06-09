@@ -2,7 +2,7 @@
   var SERVER="mcp__b47f7667-3cb0-4d8e-bbaf-fa1fca4c39c7__";
   var T={fetch:SERVER+"notion-fetch",search:SERVER+"notion-search",update:SERVER+"notion-update-page",create:SERVER+"notion-create-pages"};
   var STATE_PAGE="37478f3d-415b-814c-8c65-dd76b6ab9aa3";
-  var DBS={tasks:"fb432308-59b9-4078-92db-a83c6279957d",wins:"f99a9128-9809-48b9-9cb6-870717bd5183",routines:"17f7f036-e24c-40ce-9d41-db5d8a66b618",capture:"35ba4e31-eca6-4ab7-8625-acc41d5341e8",focusSessions:"291cb585-746e-4195-a920-b0ac460fbbf6"};
+  var DBS={tasks:"fb432308-59b9-4078-92db-a83c6279957d",wins:"f99a9128-9809-48b9-9cb6-870717bd5183",routines:"17f7f036-e24c-40ce-9d41-db5d8a66b618",capture:"35ba4e31-eca6-4ab7-8625-acc41d5341e8",focusSessions:"291cb585-746e-4195-a920-b0ac460fbbf6",dailyLog:"5c892f50-2d01-4731-9b04-ed3ac02defcf"};
   var AREA_TAG={"Focus & Work":"purple","Daily Routines":"green","Health & Sleep":"amber","Finances":"yellow","Home & Space":"blue","Relationships":"red","Claude Tasks":"cyan"};
   var AREAS=["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"];
 
@@ -70,7 +70,7 @@
   function lsRemove(op){var o=lsGet();o.pending=(o.pending||[]).filter(function(p){return JSON.stringify(p)!==JSON.stringify(op);});lsSet(o);}
   // ---- localStorage data cache: last-known-good live dataset, so phone/home boot instantly with real data ----
   var CACHEKEY="cc_v130_cache";
-  function cacheSave(){try{localStorage.setItem(CACHEKEY,JSON.stringify({v:"1.3.0",ts:Date.now(),state:app.state,tasks:app.tasks,routines:app.routines,wins:app.wins,caps:app.caps}));}catch(e){}}
+  function cacheSave(){try{localStorage.setItem(CACHEKEY,JSON.stringify({v:"1.4.0",ts:Date.now(),state:app.state,tasks:app.tasks,routines:app.routines,wins:app.wins,caps:app.caps,todoistTasks:app.todoistTasks,todoistTiles:app.todoistTiles,todoistPanel:app.todoistPanel,todoistInbox:app.todoistInbox,todoistCompletedToday:app.todoistCompletedToday,calendarEvents:app.calendarEvents}));}catch(e){}}
   function cacheLoad(){try{var o=JSON.parse(localStorage.getItem(CACHEKEY)||"null");return (o&&o.tasks&&o.state)?o:null;}catch(e){return null;}}
 
   // ---- v1.5.0 daily report: localStorage guard + Capture-DB append ----
@@ -102,18 +102,33 @@
 
   // ---- bridge ----
   var DIAG={last:null,name:"",err:""};
+  // Task 10: net-health tracker. Loaders swallow per-call errors, so the poll watches r429 to back off.
+  var NET={r429:0, retryAfterMs:0};
+  try{ window.__ccNet=NET; }catch(e){}
   function hasBridge(){return !!(window.cowork&&typeof window.cowork.callMcpTool==="function");}
   var PROXY_URL="/.netlify/functions/notion-proxy";
+  var TODOIST_PROXY_URL="/.netlify/functions/todoist-proxy";
+  var CALENDAR_PROXY_URL="/.netlify/functions/calendar-proxy";
+  function proxyUrlFor(name){
+    if(name&&name.indexOf("b9779bcc-3581-4f0e-bef4-401bb840378a")>=0) return TODOIST_PROXY_URL;
+    if(name&&name.indexOf("a8aed00c-e9c0-4e6d-8e3a-64452207f54f")>=0) return CALENDAR_PROXY_URL;  // Google Calendar (read-only Schedule lane)
+    return PROXY_URL;
+  }
   async function call(name,args){
     if(!hasBridge()){
       try{
-        var resp=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
-        if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}throw new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));}
-        var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return j;
+        var resp=await fetch(proxyUrlFor(name),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
+        if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}
+          var er=new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));
+          er.status=resp.status;                                  // Task 10: surface 429 + Retry-After to the poll loop
+          try{ er.retryAfterMs=CCData.parseRetryAfter((resp.headers&&resp.headers.get)?resp.headers.get("Retry-After"):null); }catch(_h){}
+          if(resp.status===429){ NET.r429++; NET.retryAfterMs=er.retryAfterMs||0; }
+          throw er;}
+        var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";NET.r429=0;NET.retryAfterMs=0;window.__ccDiag=DIAG;return j;
       }catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
     }
-    try{var r=await window.cowork.callMcpTool(name,args);DIAG.last=r;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return r;}
-    catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
+    try{var r=await window.cowork.callMcpTool(name,args);DIAG.last=r;DIAG.name=name;DIAG.err="";NET.r429=0;window.__ccDiag=DIAG;return r;}
+    catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;if(CCData.is429(e))NET.r429++;window.__ccDiag=DIAG;throw e;}
   }
   function waitBridge(ms){return new Promise(function(res){var waited=0,step=250;if(hasBridge())return res(true);var iv=setInterval(function(){waited+=step;if(hasBridge()){clearInterval(iv);res(true);}else if(waited>=ms){clearInterval(iv);res(false);}},step);});}
   function showDiag(){
@@ -176,7 +191,16 @@
     var m=t.match(/```json\s*([\s\S]*?)```/);var js=m?m[1].trim():null;
     if(!js){var m2=t.match(/\{[\s\S]*"taskIds"[\s\S]*?\}/);if(m2)js=m2[0].trim();}
     var obj=null;if(js){try{obj=JSON.parse(js);}catch(e){}}
-    if(obj){app.state=obj;app.stateJson=js;if(obj.databases){for(var k in obj.databases)DBS[k]=obj.databases[k];}}
+    if(obj){
+      app.state=obj;app.stateJson=js;
+      if(obj.databases){for(var k in obj.databases)DBS[k]=obj.databases[k];}
+      var REQUIRED_DBS=["tasks","wins","routines","capture","focusSessions","dailyLog"];
+      var stillMissing=CCData.missingDbKeys(DBS,REQUIRED_DBS);
+      if(stillMissing.length){DIAG.err="Missing DB: "+stillMissing.join(", ");setSync("config","Missing DB: "+stillMissing.join(", "));}
+      var persisted=obj.databases||{};
+      var toReg=CCData.missingDbKeys(persisted,REQUIRED_DBS).filter(function(x){return !!DBS[x];});
+      if(toReg.length){var resolved={};for(var ri=0;ri<toReg.length;ri++){resolved[toReg[ri]]=DBS[toReg[ri]];}await saveState({databases:CCData.mergeResolvedDatabases(persisted,resolved)});}
+    }
     return obj;
   }
   async function liveLoad(){
@@ -200,7 +224,7 @@
     app.caps=caps;
   }
   async function flushPending(){
-    var o=lsGet();var p=o.pending||[];if(!p.length)return 0;
+    var o=lsGet();var p=CCData.dedupeQueueByKey(o.pending||[]);if(!p.length)return 0;
     var failed=[];
     for(var i=0;i<p.length;i++){var op=p[i];try{
       if(op.t==="task")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Done:op.done?"__YES__":"__NO__"}});
@@ -226,6 +250,12 @@
       else if(op.t==="capDel")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Processed:"__YES__"}});
       else if(op.t==="report")await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:"[Daily Report "+op.date+"]",Notes:op.txt,Processed:"__YES__","date:Captured:start":op.date}}]});
       else if(op.t==="state")await writeStateNow(op.updates);
+      else if(op.t==="tdAdd"||op.t==="tdDone"){
+        // Task 9: replay Todoist write carrying the SAME op.key -> proxy lifts requestId into
+        // X-Request-Id -> Todoist de-dupes, so a reconnect flush never creates duplicates.
+        var fc=CCData.todoistFlushCall(op,(app.state&&app.state.todoistProjects)||{});
+        if(fc)await call(fc.name==="complete-tasks"?TT.complete:TT.quickAdd, fc.args);
+      }
     }catch(e){failed.push(op);}}
     var o2=lsGet();o2.pending=failed;lsSet(o2);
     return failed.length;
@@ -250,12 +280,11 @@
   }
 
   // ---- actions (work in both modes; live also writes Notion) ----
-  async function maybeStreak(){var t=todayHST();var s=app.state;if(s.lastCompleted===t&&s.lastWinDate===t&&s.lastStreakDate!==t){var ns=(+s.streak||0)+1;await saveState({streak:ns,lastStreakDate:t});toast("Streak → "+ns+" days");renderTopStats();}}
   async function toggleTask(t){
     t.done=!t.done;renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();
     lsPush({t:"task",id:t.id,done:t.done});
     if(app.mode==="live"){try{await call(T.update,{page_id:t.id,command:"update_properties",properties:{Done:t.done?"__YES__":"__NO__"}});lsRemove({t:"task",id:t.id,done:t.done});}catch(e){noteQueued();}}
-    if(t.done){await saveState({lastCompleted:todayHST()});await maybeStreak();}
+    if(t.done){await saveState({lastCompleted:todayHST()});}
     renderTopStats();
   }
   async function togglePriority(t){
@@ -304,7 +333,7 @@
   async function addWin(title){title=(title||"").trim();if(!title)return;var d=todayHST();app.wins.unshift({title:title,date:d});renderWins();renderTopStats();toast("Win logged");
     lsPush({t:"win",title:title,date:d});
     if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.wins},pages:[{properties:{Win:title,"date:Date:start":d}}]});lsRemove({t:"win",title:title,date:d});}catch(e){noteQueued();}}
-    await saveState({lastWinDate:d});await maybeStreak();
+    await saveState({lastWinDate:d});renderTopStats();
   }
   async function logFocus(min){var fm=(+app.state.focusMinutesToday||0)+min;app.state.focusMinutesToday=fm;renderTopStats();
     lsPush({t:"focus",min:min});

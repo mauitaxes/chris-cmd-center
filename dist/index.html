@@ -130,6 +130,7 @@
   .focus-intent{font-size:16px;text-align:center;width:100%;max-width:360px;}
   .focus-state{color:var(--txt-dim,#8aa);font-size:13px;}
   .focus-park{display:flex;gap:8px;width:100%;max-width:420px;margin-top:8px;}
+  .refresh-banner{margin:0 0 12px;padding:10px 14px;border-radius:8px;background:rgba(255,176,32,.12);border:1px solid rgba(255,176,32,.45);color:#ffb020;font-size:13px;font-weight:600;}
 </style>
 </head>
 <body>
@@ -158,6 +159,7 @@
   </div>
 
   <div class="wrap">
+    <div id="refresh-banner" class="refresh-banner" hidden></div>
     <div id="tab-today">
       <section>
         <div class="row r-gauges">
@@ -248,7 +250,7 @@
       <section>
         <div class="main">
           <div>
-            <div class="card" style="padding:0;">
+            <div class="card" id="notion-today-card" style="padding:0;display:none;">
               <div class="panel-head">
                 <span class="panel-title">Today's Tasks</span>
                 <div class="spacer"></div>
@@ -260,6 +262,24 @@
                 <button class="btn cyan" id="qa-task-btn">Add</button>
               </div>
               <div id="task-list"><div class="empty">Loading tasks…</div></div>
+            </div>
+            <div class="card col-gap" style="padding:0;">
+              <div class="panel-head">
+                <span class="panel-title">Today</span>
+                <div class="spacer"></div>
+                <span class="count-chip" id="td-inbox-chip" style="display:none;cursor:pointer;">Inbox 0</span>
+                <span class="count-chip" id="td-today-count" style="margin-left:8px;">—</span>
+              </div>
+              <div id="td-today-list"><div class="empty">Loading Todoist…</div></div>
+            </div>
+            <div class="card col-gap" style="padding:0;">
+              <div class="panel-head">
+                <span class="panel-title">Schedule · Today</span>
+                <span class="tag cyan" style="margin-left:8px;">preview</span>
+                <div class="spacer"></div>
+                <span class="count-chip" id="td-sched-count">—</span>
+              </div>
+              <div id="td-sched-list"><div class="empty">Loading schedule…</div></div>
             </div>
           </div>
 
@@ -569,6 +589,466 @@
     return lines.join("\n");
   }
 
+  // -- Task 0: D9 runtime DB-id resolution --
+  // required keys absent or falsy in the databases map (pure)
+  function missingDbKeys(dbs, required){
+    dbs=dbs||{};
+    return (required||[]).filter(function(k){ return !dbs[k]; });
+  }
+  // merge resolved ids into a databases map without overwriting existing (pure)
+  function mergeResolvedDatabases(databases, resolved){
+    var out={}, k;
+    for(k in (databases||{})){ if(Object.prototype.hasOwnProperty.call(databases,k)) out[k]=databases[k]; }
+    for(k in (resolved||{})){ if(Object.prototype.hasOwnProperty.call(resolved,k) && !out[k]) out[k]=resolved[k]; }
+    return out;
+  }
+
+  // -- Task 1: Todoist structure spec + State-payload builder (pure) --
+  function ccTodoistSpec(){
+    return {
+      parent:"Command Center",
+      areas:["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"],
+      labels:["today","energy-low","energy-med","energy-high","5m","15m","30m","1h","2h"]
+    };
+  }
+  // map created area-projects + labels (each {name,id}) to State id dicts (pure)
+  function buildTodoistStatePayload(parentId, areaProjects, labels){
+    var projects={}, labelMap={};
+    (areaProjects||[]).forEach(function(p){ if(p&&p.name) projects[p.name]=p.id; });
+    (labels||[]).forEach(function(l){ if(l&&l.name) labelMap[l.name]=l.id; });
+    return { todoistParentId:parentId||"", todoistProjects:projects, todoistLabels:labelMap };
+  }
+
+  // -- Task 2: pure migration transforms --
+  // deterministic 8-char FNV-1a hash of a notion page id (no deps)
+  function migrationIdKey(pageId){
+    var s=String(pageId||""), h=0x811c9dc5;
+    for(var i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=(h+((h<<1)+(h<<4)+(h<<7)+(h<<8)+(h<<24)))>>>0; }
+    return ("0000000"+h.toString(16)).slice(-8);
+  }
+  // map a Notion task object -> Todoist add-tasks payload + [ccid] marker (pure)
+  function notionTaskToTodoist(task, opts){
+    task=task||{}; opts=opts||{};
+    var projectId=(opts.projectByArea&&task.area&&opts.projectByArea[task.area])||opts.parentId||"";
+    var labels=[];
+    var el=opts.energyLabelMap&&task.energy&&opts.energyLabelMap[task.energy]; if(el) labels.push(el);
+    var tl=opts.timeLabelMap&&task.time&&opts.timeLabelMap[task.time]; if(tl) labels.push(tl);
+    var marker="[ccid:"+migrationIdKey(task.id)+"]";
+    var notes=String(task.notes||"");
+    var created=task.created?("[created "+String(task.created).slice(0,10)+"] "):"";
+    var description=(created+notes).trim();
+    description=(description?description+" ":"")+marker;
+    var out={ content:String(task.title||"(task)"), projectId:projectId,
+              priority:task.priority?"p1":"p4", labels:labels, description:description };
+    if(task.due) out.dueString=String(task.due).slice(0,10);
+    return out;
+  }
+  // map a Notion capture object -> Todoist inbox payload + [ccid] marker (pure)
+  function notionCaptureToTodoist(cap){
+    cap=cap||{};
+    var marker="[ccid:"+migrationIdKey(cap.id)+"]";
+    var notes=String(cap.notes||"");
+    var description=(notes?notes+" ":"")+marker;
+    return { content:String(cap.item||"(note)"), projectId:"inbox", description:description };
+  }
+  // compare expected vs actual count maps -> per-row + overall reconciliation (pure)
+  function reconcileCounts(expected, actual){
+    expected=expected||{}; actual=actual||{};
+    var keys={}, k; for(k in expected) keys[k]=1; for(k in actual) keys[k]=1;
+    var rows=[], allOk=true;
+    Object.keys(keys).forEach(function(key){
+      var e=+expected[key]||0, a=+actual[key]||0, ok=(e===a);
+      if(!ok) allOk=false;
+      rows.push({key:key, expected:e, actual:a, ok:ok});
+    });
+    return { ok:allOk, rows:rows };
+  }
+
+  // HST (UTC-10, no DST) local day -> [since,until) UTC window for completed-by-completion queries (pure, D10)
+  function hstDayUtcWindow(localDate){
+    var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(localDate||""));
+    if(!m) return null;
+    var sinceMs=Date.UTC(+m[1], +m[2]-1, +m[3], 10, 0, 0, 0); // local midnight HST = 10:00Z
+    var untilMs=sinceMs + 24*60*60*1000;
+    return { since:new Date(sinceMs).toISOString(), until:new Date(untilMs).toISOString() };
+  }
+  // filter Todoist activity-log "completed" events to a project-id set within a UTC [since,until) window (pure).
+  // Source of truth for the streak/progress "completed today" signal: recurring completions appear HERE
+  // (with extraData.isRecurring) but NOT in find-completed-tasks (CP3 spike, 2026-06-08).
+  function completedInTreeOnDay(events, treeProjectIds, sinceUtcISO, untilUtcISO){
+    var set={}; (treeProjectIds||[]).forEach(function(id){ if(id) set[id]=1; });
+    var since=Date.parse(sinceUtcISO), until=Date.parse(untilUtcISO);
+    return (events||[]).filter(function(e){
+      if(!e || e.eventType!=="completed") return false;
+      if(!set[e.parentProjectId]) return false;
+      var t=Date.parse(e.eventDate);
+      return t>=since && t<until;
+    });
+  }
+
+  // strip migration markers ([created YYYY-MM-DD] prefix, [ccid:hash] suffix) from a Todoist description (pure)
+  function stripCcMarkers(s){
+    return String(s||"")
+      .replace(/\[created\s+\d{4}-\d{2}-\d{2}\]\s*/g,"")
+      .replace(/\s*\[ccid:[0-9a-f]{8}\]/g,"")
+      .trim();
+  }
+  // Todoist (MCP/proxy) task shape -> the dashboard's app.tasks model so existing render reuses (pure)
+  function normalizeTodoistTask(raw, areaByProjectId){
+    raw=raw||{}; areaByProjectId=areaByProjectId||{};
+    return {
+      id:String(raw.id||""),
+      title:String(raw.content||""),
+      area:areaByProjectId[raw.projectId]||"",
+      priority:raw.priority==="p1",
+      done:!!raw.checked,
+      due:raw.dueDate||"",
+      labels:Array.isArray(raw.labels)?raw.labels:[],
+      recurring:!!raw.recurring,
+      notes:stripCcMarkers(raw.description)
+    };
+  }
+  // dashboard tile numbers from normalized tasks: open count, p1 count, per-area, active-area count (pure)
+  function todoistTileCounts(tasks){
+    tasks=tasks||[];
+    var open=0,p1=0,byArea={},areas={};
+    tasks.forEach(function(t){
+      if(t.done) return;
+      open++;
+      if(t.priority) p1++;
+      var a=t.area||"(none)";
+      byArea[a]=(byArea[a]||0)+1; areas[a]=1;
+    });
+    return { open:open, p1:p1, areasActive:Object.keys(areas).length, byArea:byArea };
+  }
+
+  // Today panel split: bucket open tasks into today vs overdue (HST date strings), collapse a long
+  // overdue list past threshold. due compared on date-prefix so MCP datetimes ("...T08:00:00") and
+  // proxy date-only both work. today = due-today | labelled "today" | priority (future/no-due). (pure, Task 3b)
+  function splitTodayPanel(tasks, opts){
+    opts=opts||{};
+    var todayStr=String(opts.today||"");
+    var threshold=(opts.threshold==null)?5:opts.threshold;
+    var today=[], overdue=[];
+    (tasks||[]).forEach(function(t){
+      if(t.done) return;
+      var due=String(t.due||"").slice(0,10);
+      var labels=Array.isArray(t.labels)?t.labels:[];
+      if(due && todayStr && due<todayStr){ overdue.push(t); }
+      else if(due===todayStr || labels.indexOf("today")!==-1 || t.priority){ today.push(t); }
+    });
+    today.sort(function(a,b){
+      var ap=a.priority?0:1, bp=b.priority?0:1; if(ap!==bp) return ap-bp;
+      var ad=String(a.due||"").slice(0,10)||"9999-99-99", bd=String(b.due||"").slice(0,10)||"9999-99-99";
+      if(ad<bd) return -1; if(ad>bd) return 1;
+      return String(a.title||"").localeCompare(String(b.title||""));
+    });
+    overdue.sort(function(a,b){
+      var ad=String(a.due||"").slice(0,10), bd=String(b.due||"").slice(0,10);
+      return ad<bd?-1:(ad>bd?1:0);
+    });
+    return { today:today, overdue:overdue, overdueCount:overdue.length,
+      overdueCollapsed:overdue.length>threshold, threshold:threshold };
+  }
+
+
+  // Merge normalized calendar events from N calendars into one time-ordered, de-duped list (pure, Task 3c).
+  // Input: array of arrays of {start,end,title,allDay,calendarId,htmlLink,id}. De-dupe so an appointment that
+  // appears in two calendars shows once (same start+title => same appointment); the first occurrence wins.
+  // All-day events (start "YYYY-MM-DD") sort before timed events the same day; unparseable starts sort last.
+  function mergeCalendarEvents(eventsArrays){
+    var seen={}, out=[];
+    (eventsArrays||[]).forEach(function(arr){
+      (arr||[]).forEach(function(e){
+        if(!e) return;
+        var key=String(e.start||"")+"\u0000"+String(e.title||"");
+        if(seen[key]) return;
+        seen[key]=1; out.push(e);
+      });
+    });
+    out.sort(function(a,b){
+      var ta=Date.parse(a.start), tb=Date.parse(b.start), na=isNaN(ta), nb=isNaN(tb);
+      if(na&&nb) return String(a.title||"").localeCompare(String(b.title||""));
+      if(na) return 1; if(nb) return -1;
+      if(ta!==tb) return ta-tb;
+      return String(a.title||"").localeCompare(String(b.title||""));
+    });
+    return out;
+  }
+
+  // ---- Task 5: pure write helpers (quick-add resolution, idempotency, MCP arg builders) ----
+  // Resolve a CC area name -> its Todoist sub-project id; unknown/global capture -> "inbox".
+  function quickAddProjectId(area, todoistProjects){
+    todoistProjects=todoistProjects||{};
+    var pid=area?todoistProjects[area]:"";
+    return pid?String(pid):"inbox";
+  }
+  // Stable-per-write idempotency key (generated once, reused on retry via the offline queue) so a
+  // retried POST de-dupes server-side via the proxy's X-Request-Id. Unique per call.
+  function idempotencyKey(prefix){
+    prefix=prefix||"cc";
+    var rnd=Math.random().toString(36).slice(2,10);
+    return String(prefix)+"-"+Date.now().toString(36)+"-"+rnd;
+  }
+  // Build MCP add-tasks args from a quick-add. Returns null for empty titles. Same shape across the
+  // Cowork-MCP and deployed-proxy paths; the proxy lifts requestId into X-Request-Id.
+  function buildQuickAddArgs(title, area, todoistProjects, key){
+    title=(title||"").trim();
+    if(!title) return null;
+    return { tasks:[{content:title, projectId:quickAddProjectId(area, todoistProjects)}],
+             requestId:key||idempotencyKey("add") };
+  }
+  // Build MCP complete-tasks args for a single optimistic check-off.
+  function buildCompleteArgs(id, key){
+    return { ids:[String(id)], requestId:key||idempotencyKey("done") };
+  }
+  // Optimistic check-off: return a NEW array with the matching id removed (id string-coerced).
+  // Non-mutating so the caller can keep the original as a rollback snapshot. Null/empty -> [].
+  function optimisticRemove(tasks, id){
+    if(!Array.isArray(tasks)) return [];
+    var target=String(id);
+    return tasks.filter(function(t){ return t && String(t.id)!==target; });
+  }
+
+  // ---- Task 6: pure defer helpers (classify path, label/date builders) ----
+  // Non-mutating: return a copy of labels minus "today". null/undefined -> [].
+  function withoutTodayLabel(labels){
+    return (Array.isArray(labels)?labels:[]).filter(function(l){ return l!=="today"; });
+  }
+  // today+1 as YYYY-MM-DD via pure UTC math (HST has no DST; todayStr already HST date). Unparseable -> "".
+  function tomorrowHst(todayStr){
+    var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(todayStr||""));
+    if(!m) return "";
+    var d=new Date(Date.UTC(+m[1], +m[2]-1, +m[3]+1));
+    return d.toISOString().slice(0,10);
+  }
+  // Classify a deferred task into its write path. Recurring ALWAYS deep-links (never mutate recurrence via API).
+  // choice: "not-today" | "tomorrow"(default) | "specific"/a date string. "specific"/date -> deep-link.
+  function classifyDefer(task, choice){
+    task=task||{};
+    if(task.recurring) return "deep-link";
+    choice=(choice==null||choice==="")?"tomorrow":String(choice);
+    if(choice==="not-today") return "not-today";
+    if(choice!=="tomorrow") return "deep-link"; // "specific" or an explicit YYYY-MM-DD the user picked
+    return (String(task.due||"")!=="") ? "tomorrow-dated" : "tomorrow-undated";
+  }
+  // Build update-tasks args for the two mutating paths; null for deep-link. All mutating paths drop "today";
+  // tomorrow-dated also snoozes due_date to tomorrowHst(todayStr) (today+1, not stale due). Undated queue is the caller's job.
+  function buildDeferArgs(task, choice, todayStr, key){
+    task=task||{};
+    var cls=classifyDefer(task, choice);
+    if(cls==="deep-link") return null;
+    var t={ id:String(task.id), labels:withoutTodayLabel(task.labels) };
+    if(cls==="tomorrow-dated") t.due_date=tomorrowHst(todayStr);
+    return { tasks:[t], requestId:key||idempotencyKey("defer") };
+  }
+  // Build update-tasks args to set/clear a task's priority. star ON -> "p1" (highest); OFF -> "p4" (default).
+  // Mirrors the migration's boolean<->p1/p4 mapping; the proxy inverts p1/p4 to REST 4/1. Pure.
+  function buildPriorityArgs(id, on, key){
+    return { tasks:[{ id:String(id), priority: on?"p1":"p4" }], requestId:key||idempotencyKey("prio") };
+  }
+
+  // ---- Task 7: nightly-refresh pure helpers ----
+  // add "today" to a labels array if absent (non-mutating). null/undefined -> ["today"].
+  function withTodayLabel(labels){
+    var l=(Array.isArray(labels)?labels:[]).slice();
+    if(l.indexOf("today")===-1) l.push("today");
+    return l;
+  }
+  // routine completion ratio: {done,total,pct(0..1),zero}. zero===true when there are no steps.
+  function routinePct(routines){
+    var list=Array.isArray(routines)?routines:[];
+    var total=list.length;
+    var done=list.filter(function(r){return r&&r.done;}).length;
+    return { done:done, total:total, pct: total? done/total : 0, zero: total===0 };
+  }
+  // Streak rule (single source for Task 7 job + Task 8 display): increment iff Win today AND a CC task
+  // completed today AND morning routine >=80% done. Idempotent per day (lastStreakDate guard). Grace:
+  // on/before streakGraceUntil the day secures regardless (cutover). Zero routine steps -> skip
+  // condition 3 + warn. Pure; never resets the streak (break logic is a separate concern).
+  // Shared predicate checker for the streak rule (single source for evaluateStreak + streakStatus, so
+  // the nightly job's math and the dashboard's status text can never diverge). Pure.
+  function streakConditions(o){
+    o=o||{};
+    var today=o.today!=null?String(o.today):"";
+    var last=o.lastStreakDate!=null?String(o.lastStreakDate):"";
+    var hasWin=!!o.hasWinToday;
+    var didComplete=(typeof o.completedToday==="number")?(o.completedToday>0):!!o.completedToday;
+    var steps=+o.routineSteps||0;
+    var warnZeroRoutine=!(steps>0);
+    var routineOk=warnZeroRoutine?true:((+o.routinePct||0)>=0.8);
+    var inGrace=!!(o.streakGraceUntil&&today&&today<=String(o.streakGraceUntil));
+    var alreadyToday=!!(last&&last===today);
+    var conditionsMet=hasWin&&didComplete&&routineOk;
+    return { today:today, last:last, hasWin:hasWin, didComplete:didComplete, routineOk:routineOk,
+             warnZeroRoutine:warnZeroRoutine, inGrace:inGrace, alreadyToday:alreadyToday, conditionsMet:conditionsMet };
+  }
+  function evaluateStreak(o){
+    var streak=+((o||{}).streak)||0;
+    var c=streakConditions(o);
+    if(c.alreadyToday){ return { streak:streak, lastStreakDate:c.last, secured:true, warnZeroRoutine:c.warnZeroRoutine }; }
+    if(c.conditionsMet||c.inGrace){ return { streak:streak+1, lastStreakDate:c.today, secured:true, warnZeroRoutine:c.warnZeroRoutine }; }
+    return { streak:streak, lastStreakDate:c.last, secured:false, warnZeroRoutine:c.warnZeroRoutine };
+  }
+  // Display-only streak status for the dashboard (Task 8). NEVER advances the streak. Returns whether
+  // today is already secured (or would be), the UNMET conditions in win/task/routine order, a
+  // zero-routine-steps warning (routine condition skipped), and whether grace is in effect. Pure.
+  function streakStatus(o){
+    var c=streakConditions(o);
+    var secured=c.alreadyToday||c.conditionsMet||c.inGrace;
+    var needs=[];
+    if(!secured){
+      if(!c.hasWin) needs.push("win");
+      if(!c.didComplete) needs.push("task");
+      if(!c.warnZeroRoutine && !c.routineOk) needs.push("routine");
+    }
+    return { secured:secured, needs:needs, warnZeroRoutine:c.warnZeroRoutine, graced:c.inGrace };
+  }
+  // Build ONE update-tasks args object for the nightly relabel:
+  //  - todayTasks (currently @today): drop "today"
+  //  - retagTasks (resolved {id,labels} for State.retagTomorrow ids): add "today"
+  // De-duped by id; retag wins (ensures "today" present) if an id appears in both. The proxy writes
+  // labels wholesale, so retagTasks MUST carry each task's current labels. Returns {tasks,requestId}.
+  function buildNightlyTodoistArgs(todayTasks, retagTasks, key){
+    var byId={}, order=[];
+    function put(id,labels){ id=String(id); if(byId[id]===undefined) order.push(id); byId[id]=labels; }
+    (Array.isArray(todayTasks)?todayTasks:[]).forEach(function(t){ if(t&&t.id!=null) put(t.id, withoutTodayLabel(t.labels)); });
+    (Array.isArray(retagTasks)?retagTasks:[]).forEach(function(t){ if(t&&t.id!=null) put(t.id, withTodayLabel(t.labels)); });
+    var tasks=order.map(function(id){ return { id:id, labels:byId[id] }; });
+    return { tasks:tasks, requestId:key||idempotencyKey("nightly") };
+  }
+  // Single merged State patch for the nightly job. Always clears retagTomorrow and stamps lastRefreshDate.
+  // streak/lastStreakDate/plannedToday/progress included only when provided. Pure.
+  function buildNightlyStateUpdates(o){
+    o=o||{};
+    var out={ retagTomorrow:[], lastRefreshDate:(o.lastRefreshDate!=null?String(o.lastRefreshDate):"") };
+    if(o.streak!==undefined) out.streak=o.streak;
+    if(o.lastStreakDate!==undefined) out.lastStreakDate=o.lastStreakDate;
+    if(Array.isArray(o.plannedToday)) out.plannedToday=o.plannedToday.map(String);
+    if(o.progress&&typeof o.progress==="object") out.progress=o.progress;
+    return out;
+  }
+  // Client gauge: frozen-denominator Today's Progress. When plannedToday[] is present & non-empty,
+  // total=plannedToday.length (frozen at last refresh) and the bar may exceed 100% (forward-only,
+  // never retreats). Otherwise active:false -> caller keeps legacy done/total behavior. Pure.
+  function progressGauge(o){
+    o=o||{};
+    var planned=Array.isArray(o.plannedToday)?o.plannedToday:[];
+    var done=+o.doneCount||0;
+    if(!planned.length){ var ft=+o.fallbackTotal||0; return { active:false, done:done, total:ft, pct: ft? done/ft : 0 }; }
+    return { active:true, done:done, total:planned.length, pct: done/planned.length };
+  }
+  // True when the nightly refresh appears missed: a prior lastRefreshDate exists and != today.
+  // (Absent lastRefreshDate -> false, so brand-new/snapshot state doesn't nag.) Pure.
+  function missedRefresh(lastRefreshDate, today){
+    var l=lastRefreshDate!=null?String(lastRefreshDate):"";
+    return !!l && l!==String(today==null?"":today);
+  }
+
+  // ---- Task 9: offline-queue helpers for Todoist writes (pure; minted-once idempotency) ----
+  // Stamp a stable key onto a queued Todoist quick-add op. Key minted by idempotencyKey if absent,
+  // PRESERVED if already present (so every retry carries the SAME requestId -> X-Request-Id dedupe).
+  // Empty title -> null (nothing to queue). area defaults to "" (global Quick Capture -> Inbox).
+  function queueTodoistAdd(o){
+    o=o||{};
+    var title=(o.title||"").trim();
+    if(!title) return null;
+    return { t:"tdAdd", key:o.key||idempotencyKey("add"), title:title, area:o.area||"" };
+  }
+  // Stamp a stable key onto a queued Todoist check-off op. Missing id -> null. Key preserved if present.
+  function queueTodoistDone(o){
+    o=o||{};
+    if(o.id==null||o.id==="") return null;
+    return { t:"tdDone", key:o.key||idempotencyKey("done"), id:String(o.id) };
+  }
+  // Defensive de-dupe: collapse queued ops that share a `key` (a double-enqueue must not double-create).
+  // Order-preserving; keeps the FIRST op per key. Ops without a key (other op types) always pass through.
+  function dedupeQueueByKey(pending){
+    var out=[], seen={}, i, op, k;
+    if(!Array.isArray(pending)) return out;
+    for(i=0;i<pending.length;i++){
+      op=pending[i];
+      k=op&&op.key;
+      if(k==null||k===""){ out.push(op); continue; }
+      if(seen[k]) continue;
+      seen[k]=true; out.push(op);
+    }
+    return out;
+  }
+  // Map a queued Todoist op -> { name, args } for replay, reusing the SAME op.key so the requestId is
+  // identical on every flush. name is the MCP op suffix ("add-tasks"/"complete-tasks"). Empty title or
+  // unknown op type -> null (no-op). todoistProjects drives area->project (unknown/global -> Inbox).
+  function todoistFlushCall(op, todoistProjects){
+    op=op||{};
+    if(op.t==="tdAdd"){
+      var args=buildQuickAddArgs(op.title, op.area, todoistProjects, op.key);
+      if(!args) return null;                       // empty title -> nothing to flush
+      return { name:"add-tasks", args:args };
+    }
+    if(op.t==="tdDone"){
+      if(op.id==null||op.id==="") return null;
+      return { name:"complete-tasks", args:buildCompleteArgs(op.id, op.key) };
+    }
+    return null;
+  }
+
+  // ---- Task 10: refresh/poll scheduling + in-session staleness (pure, testable) ----
+  // Parse a Retry-After header value -> ms to wait. Integer delta-seconds OR HTTP-date. Missing/invalid -> 0.
+  function parseRetryAfter(value, nowMs){
+    if(value==null) return 0;
+    var v=String(value).trim();
+    if(v==="") return 0;
+    if(/^\d+$/.test(v)) return parseInt(v,10)*1000;
+    var t=Date.parse(v);
+    if(isNaN(t)) return 0;
+    var now=(typeof nowMs==="number")?nowMs:Date.now();
+    return Math.max(0, t-now);
+  }
+  // Recognize a 429 (rate limit) from a status number OR an error/message string (client bridge fallback).
+  function is429(x){
+    if(x===429) return true;
+    if(x==null) return false;
+    if(typeof x==="number") return x===429;
+    var s=String((x&&x.message)||x);
+    return /(^|[^0-9])429([^0-9]|$)/.test(s) || /too many requests/i.test(s) || /rate.?limit/i.test(s);
+  }
+  // Exponential backoff for N consecutive failures. failures<=0 -> 0. base*factor^(failures-1), capped at max.
+  function backoffDelay(failures, opts){
+    opts=opts||{};
+    var n=+failures||0; if(n<=0) return 0;
+    var base=opts.base||5000, factor=opts.factor||2, max=opts.max||300000;
+    return Math.min(base*Math.pow(factor, n-1), max);
+  }
+  // Decide ms until the next refresh from the last attempt's outcome. ok -> steady pollMs; 429 -> honor
+  // Retry-After (max'd with backoff so we never poll faster than the server allows); other error -> backoff.
+  function nextRefreshDelay(o){
+    o=o||{};
+    var pollMs=(o.pollMs!=null)?o.pollMs:180000;            // 3-min steady cadence
+    if(o.ok) return pollMs;
+    var b=backoffDelay(o.failures||1, {base:o.baseMs||5000, factor:2, max:o.maxMs||300000});
+    if(is429(o.status) || (+o.retryAfterMs||0)>0) return Math.max(+o.retryAfterMs||0, b);
+    return b;
+  }
+  // Human-friendly age from a duration in ms (pure; it's a delta, timezone-agnostic).
+  function refreshAge(ageMs){
+    var s=Math.floor((+ageMs||0)/1000);
+    if(s<5) return "just now";
+    if(s<60) return s+"s ago";
+    var m=Math.floor(s/60);
+    if(m<60) return m+"m ago";
+    return Math.floor(m/60)+"h ago";
+  }
+  // In-session staleness for the live sync indicator. No success yet -> {ageMs:null,stale:false,text:""}.
+  function refreshStatus(o){
+    o=o||{};
+    if(!o.lastSuccessTs) return { ageMs:null, stale:false, text:"" };
+    var now=(typeof o.now==="number")?o.now:Date.now();
+    var age=Math.max(0, now-o.lastSuccessTs);
+    var staleAfter=(o.staleAfterMs!=null)?o.staleAfterMs:600000;   // 10-min stale threshold
+    var stale=age>=staleAfter;
+    return { ageMs:age, stale:stale, text:(stale?"stale · ":"")+"updated "+refreshAge(age) };
+  }
+
   return {
     unwrap: unwrap,
     deepText: deepText,
@@ -590,7 +1070,50 @@
     clearedRoutines: clearedRoutines,
     purgeRoutineOps: purgeRoutineOps,
     dailyReportText: dailyReportText,
-    classifySyncError: classifySyncError
+    classifySyncError: classifySyncError,
+    missingDbKeys: missingDbKeys,
+    mergeResolvedDatabases: mergeResolvedDatabases,
+    ccTodoistSpec: ccTodoistSpec,
+    buildTodoistStatePayload: buildTodoistStatePayload,
+    migrationIdKey: migrationIdKey,
+    notionTaskToTodoist: notionTaskToTodoist,
+    notionCaptureToTodoist: notionCaptureToTodoist,
+    reconcileCounts: reconcileCounts,
+    hstDayUtcWindow: hstDayUtcWindow,
+    completedInTreeOnDay: completedInTreeOnDay,
+    stripCcMarkers: stripCcMarkers,
+    normalizeTodoistTask: normalizeTodoistTask,
+    todoistTileCounts: todoistTileCounts,
+    splitTodayPanel: splitTodayPanel,
+    mergeCalendarEvents: mergeCalendarEvents,
+    quickAddProjectId: quickAddProjectId,
+    idempotencyKey: idempotencyKey,
+    buildQuickAddArgs: buildQuickAddArgs,
+    buildCompleteArgs: buildCompleteArgs,
+    optimisticRemove: optimisticRemove,
+    queueTodoistAdd: queueTodoistAdd,
+    queueTodoistDone: queueTodoistDone,
+    dedupeQueueByKey: dedupeQueueByKey,
+    todoistFlushCall: todoistFlushCall,
+    withoutTodayLabel: withoutTodayLabel,
+    tomorrowHst: tomorrowHst,
+    classifyDefer: classifyDefer,
+    buildDeferArgs: buildDeferArgs,
+    buildPriorityArgs: buildPriorityArgs,
+    withTodayLabel: withTodayLabel,
+    routinePct: routinePct,
+    evaluateStreak: evaluateStreak,
+    streakStatus: streakStatus,
+    buildNightlyTodoistArgs: buildNightlyTodoistArgs,
+    buildNightlyStateUpdates: buildNightlyStateUpdates,
+    progressGauge: progressGauge,
+    missedRefresh: missedRefresh,
+    parseRetryAfter: parseRetryAfter,
+    is429: is429,
+    backoffDelay: backoffDelay,
+    nextRefreshDelay: nextRefreshDelay,
+    refreshAge: refreshAge,
+    refreshStatus: refreshStatus
   };
 });
 /*__CC_DATA_END__*/
@@ -598,7 +1121,7 @@
   var SERVER="mcp__b47f7667-3cb0-4d8e-bbaf-fa1fca4c39c7__";
   var T={fetch:SERVER+"notion-fetch",search:SERVER+"notion-search",update:SERVER+"notion-update-page",create:SERVER+"notion-create-pages"};
   var STATE_PAGE="37478f3d-415b-814c-8c65-dd76b6ab9aa3";
-  var DBS={tasks:"fb432308-59b9-4078-92db-a83c6279957d",wins:"f99a9128-9809-48b9-9cb6-870717bd5183",routines:"17f7f036-e24c-40ce-9d41-db5d8a66b618",capture:"35ba4e31-eca6-4ab7-8625-acc41d5341e8",focusSessions:"291cb585-746e-4195-a920-b0ac460fbbf6"};
+  var DBS={tasks:"fb432308-59b9-4078-92db-a83c6279957d",wins:"f99a9128-9809-48b9-9cb6-870717bd5183",routines:"17f7f036-e24c-40ce-9d41-db5d8a66b618",capture:"35ba4e31-eca6-4ab7-8625-acc41d5341e8",focusSessions:"291cb585-746e-4195-a920-b0ac460fbbf6",dailyLog:"5c892f50-2d01-4731-9b04-ed3ac02defcf"};
   var AREA_TAG={"Focus & Work":"purple","Daily Routines":"green","Health & Sleep":"amber","Finances":"yellow","Home & Space":"blue","Relationships":"red","Claude Tasks":"cyan"};
   var AREAS=["Daily Routines","Focus & Work","Health & Sleep","Finances","Home & Space","Relationships","Claude Tasks"];
 
@@ -666,7 +1189,7 @@
   function lsRemove(op){var o=lsGet();o.pending=(o.pending||[]).filter(function(p){return JSON.stringify(p)!==JSON.stringify(op);});lsSet(o);}
   // ---- localStorage data cache: last-known-good live dataset, so phone/home boot instantly with real data ----
   var CACHEKEY="cc_v130_cache";
-  function cacheSave(){try{localStorage.setItem(CACHEKEY,JSON.stringify({v:"1.3.0",ts:Date.now(),state:app.state,tasks:app.tasks,routines:app.routines,wins:app.wins,caps:app.caps}));}catch(e){}}
+  function cacheSave(){try{localStorage.setItem(CACHEKEY,JSON.stringify({v:"1.4.0",ts:Date.now(),state:app.state,tasks:app.tasks,routines:app.routines,wins:app.wins,caps:app.caps,todoistTasks:app.todoistTasks,todoistTiles:app.todoistTiles,todoistPanel:app.todoistPanel,todoistInbox:app.todoistInbox,todoistCompletedToday:app.todoistCompletedToday,calendarEvents:app.calendarEvents}));}catch(e){}}
   function cacheLoad(){try{var o=JSON.parse(localStorage.getItem(CACHEKEY)||"null");return (o&&o.tasks&&o.state)?o:null;}catch(e){return null;}}
 
   // ---- v1.5.0 daily report: localStorage guard + Capture-DB append ----
@@ -698,18 +1221,33 @@
 
   // ---- bridge ----
   var DIAG={last:null,name:"",err:""};
+  // Task 10: net-health tracker. Loaders swallow per-call errors, so the poll watches r429 to back off.
+  var NET={r429:0, retryAfterMs:0};
+  try{ window.__ccNet=NET; }catch(e){}
   function hasBridge(){return !!(window.cowork&&typeof window.cowork.callMcpTool==="function");}
   var PROXY_URL="/.netlify/functions/notion-proxy";
+  var TODOIST_PROXY_URL="/.netlify/functions/todoist-proxy";
+  var CALENDAR_PROXY_URL="/.netlify/functions/calendar-proxy";
+  function proxyUrlFor(name){
+    if(name&&name.indexOf("b9779bcc-3581-4f0e-bef4-401bb840378a")>=0) return TODOIST_PROXY_URL;
+    if(name&&name.indexOf("a8aed00c-e9c0-4e6d-8e3a-64452207f54f")>=0) return CALENDAR_PROXY_URL;  // Google Calendar (read-only Schedule lane)
+    return PROXY_URL;
+  }
   async function call(name,args){
     if(!hasBridge()){
       try{
-        var resp=await fetch(PROXY_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
-        if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}throw new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));}
-        var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return j;
+        var resp=await fetch(proxyUrlFor(name),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:name,args:args})});
+        if(!resp.ok){var bt="";try{bt=await resp.text();}catch(_e){}
+          var er=new Error("proxy "+resp.status+(bt?(" "+bt.slice(0,140)):""));
+          er.status=resp.status;                                  // Task 10: surface 429 + Retry-After to the poll loop
+          try{ er.retryAfterMs=CCData.parseRetryAfter((resp.headers&&resp.headers.get)?resp.headers.get("Retry-After"):null); }catch(_h){}
+          if(resp.status===429){ NET.r429++; NET.retryAfterMs=er.retryAfterMs||0; }
+          throw er;}
+        var j=await resp.json();DIAG.last=j;DIAG.name=name;DIAG.err="";NET.r429=0;NET.retryAfterMs=0;window.__ccDiag=DIAG;return j;
       }catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
     }
-    try{var r=await window.cowork.callMcpTool(name,args);DIAG.last=r;DIAG.name=name;DIAG.err="";window.__ccDiag=DIAG;return r;}
-    catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;window.__ccDiag=DIAG;throw e;}
+    try{var r=await window.cowork.callMcpTool(name,args);DIAG.last=r;DIAG.name=name;DIAG.err="";NET.r429=0;window.__ccDiag=DIAG;return r;}
+    catch(e){DIAG.err=String((e&&e.message)||e);DIAG.name=name;if(CCData.is429(e))NET.r429++;window.__ccDiag=DIAG;throw e;}
   }
   function waitBridge(ms){return new Promise(function(res){var waited=0,step=250;if(hasBridge())return res(true);var iv=setInterval(function(){waited+=step;if(hasBridge()){clearInterval(iv);res(true);}else if(waited>=ms){clearInterval(iv);res(false);}},step);});}
   function showDiag(){
@@ -772,7 +1310,16 @@
     var m=t.match(/```json\s*([\s\S]*?)```/);var js=m?m[1].trim():null;
     if(!js){var m2=t.match(/\{[\s\S]*"taskIds"[\s\S]*?\}/);if(m2)js=m2[0].trim();}
     var obj=null;if(js){try{obj=JSON.parse(js);}catch(e){}}
-    if(obj){app.state=obj;app.stateJson=js;if(obj.databases){for(var k in obj.databases)DBS[k]=obj.databases[k];}}
+    if(obj){
+      app.state=obj;app.stateJson=js;
+      if(obj.databases){for(var k in obj.databases)DBS[k]=obj.databases[k];}
+      var REQUIRED_DBS=["tasks","wins","routines","capture","focusSessions","dailyLog"];
+      var stillMissing=CCData.missingDbKeys(DBS,REQUIRED_DBS);
+      if(stillMissing.length){DIAG.err="Missing DB: "+stillMissing.join(", ");setSync("config","Missing DB: "+stillMissing.join(", "));}
+      var persisted=obj.databases||{};
+      var toReg=CCData.missingDbKeys(persisted,REQUIRED_DBS).filter(function(x){return !!DBS[x];});
+      if(toReg.length){var resolved={};for(var ri=0;ri<toReg.length;ri++){resolved[toReg[ri]]=DBS[toReg[ri]];}await saveState({databases:CCData.mergeResolvedDatabases(persisted,resolved)});}
+    }
     return obj;
   }
   async function liveLoad(){
@@ -796,7 +1343,7 @@
     app.caps=caps;
   }
   async function flushPending(){
-    var o=lsGet();var p=o.pending||[];if(!p.length)return 0;
+    var o=lsGet();var p=CCData.dedupeQueueByKey(o.pending||[]);if(!p.length)return 0;
     var failed=[];
     for(var i=0;i<p.length;i++){var op=p[i];try{
       if(op.t==="task")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Done:op.done?"__YES__":"__NO__"}});
@@ -822,6 +1369,12 @@
       else if(op.t==="capDel")await call(T.update,{page_id:op.id,command:"update_properties",properties:{Processed:"__YES__"}});
       else if(op.t==="report")await call(T.create,{parent:{data_source_id:DBS.capture},pages:[{properties:{Item:"[Daily Report "+op.date+"]",Notes:op.txt,Processed:"__YES__","date:Captured:start":op.date}}]});
       else if(op.t==="state")await writeStateNow(op.updates);
+      else if(op.t==="tdAdd"||op.t==="tdDone"){
+        // Task 9: replay Todoist write carrying the SAME op.key -> proxy lifts requestId into
+        // X-Request-Id -> Todoist de-dupes, so a reconnect flush never creates duplicates.
+        var fc=CCData.todoistFlushCall(op,(app.state&&app.state.todoistProjects)||{});
+        if(fc)await call(fc.name==="complete-tasks"?TT.complete:TT.quickAdd, fc.args);
+      }
     }catch(e){failed.push(op);}}
     var o2=lsGet();o2.pending=failed;lsSet(o2);
     return failed.length;
@@ -846,12 +1399,11 @@
   }
 
   // ---- actions (work in both modes; live also writes Notion) ----
-  async function maybeStreak(){var t=todayHST();var s=app.state;if(s.lastCompleted===t&&s.lastWinDate===t&&s.lastStreakDate!==t){var ns=(+s.streak||0)+1;await saveState({streak:ns,lastStreakDate:t});toast("Streak → "+ns+" days");renderTopStats();}}
   async function toggleTask(t){
     t.done=!t.done;renderTasks();if(typeof renderTaskSections==="function")renderTaskSections();
     lsPush({t:"task",id:t.id,done:t.done});
     if(app.mode==="live"){try{await call(T.update,{page_id:t.id,command:"update_properties",properties:{Done:t.done?"__YES__":"__NO__"}});lsRemove({t:"task",id:t.id,done:t.done});}catch(e){noteQueued();}}
-    if(t.done){await saveState({lastCompleted:todayHST()});await maybeStreak();}
+    if(t.done){await saveState({lastCompleted:todayHST()});}
     renderTopStats();
   }
   async function togglePriority(t){
@@ -900,13 +1452,399 @@
   async function addWin(title){title=(title||"").trim();if(!title)return;var d=todayHST();app.wins.unshift({title:title,date:d});renderWins();renderTopStats();toast("Win logged");
     lsPush({t:"win",title:title,date:d});
     if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.wins},pages:[{properties:{Win:title,"date:Date:start":d}}]});lsRemove({t:"win",title:title,date:d});}catch(e){noteQueued();}}
-    await saveState({lastWinDate:d});await maybeStreak();
+    await saveState({lastWinDate:d});renderTopStats();
   }
   async function logFocus(min){var fm=(+app.state.focusMinutesToday||0)+min;app.state.focusMinutesToday=fm;renderTopStats();
     lsPush({t:"focus",min:min});
     if(app.mode==="live"){try{await call(T.create,{parent:{data_source_id:DBS.focusSessions},pages:[{properties:{Session:"Focus "+min+"m "+todayHST(),"date:Date:start":todayHST(),Minutes:min,Type:"Focus"}}]});await saveState({focusMinutesToday:fm});lsRemove({t:"focus",min:min});}catch(e){noteQueued();}}
   }
 
+  // ---- app.c.js : Todoist (+Calendar) read/write browser logic (Task 3+) ----
+  // Concatenated between app.a.js and app.b.js inside the shared IIFE (build order a -> c -> b),
+  // so these definitions exist before app.b.js wire()/boot() run. Keeps each build input < 40KB.
+  // Todoist MCP server prefix. call() passes the FULL name through: Cowork -> callMcpTool;
+  // deployed browser -> todoist-proxy (call() routes by this uuid). suffix() in the proxy strips it.
+  var TSERVER="mcp__b9779bcc-3581-4f0e-bef4-401bb840378a__";
+  var TT={
+    findTasks:TSERVER+"find-tasks",
+    findActivity:TSERVER+"find-activity",
+    complete:TSERVER+"complete-tasks",
+    quickAdd:TSERVER+"add-tasks",
+    findProjects:TSERVER+"find-projects",
+    update:TSERVER+"update-tasks"
+  };
+  var TODOIST_INBOX_URL="https://app.todoist.com/app/inbox";
+  // ---- 3c: Google Calendar (read-only Schedule lane). MCP-only path for now (Cowork populates;
+  // deployed site shows an empty state until a calendar-proxy is built — scope decided with Chris). ----
+  var CALSERVER="mcp__a8aed00c-e9c0-4e6d-8e3a-64452207f54f__";
+  var CAL={ listCalendars:CALSERVER+"list_calendars", listEvents:CALSERVER+"list_events" };
+  var CAL_DEFAULT_ALLOW=["mauitaxes@gmail.com"]; // primary only; Holidays calendar declined.
+  // allow-list lives in State (persisted once on first calendar load); falls back to the default.
+  function calendarAllowList(){
+    var a=app.state&&app.state.calendarAllowList;
+    return (Array.isArray(a)&&a.length)?a:CAL_DEFAULT_ALLOW;
+  }
+  // overdue-collapse threshold (G3, default 5; Chris may tune via localStorage)
+  function tdOverdueThreshold(){ var n; try{ n=parseInt(localStorage.getItem("cc_overdueThreshold"),10); }catch(e){} return (n>0)?n:5; }
+  // reverse map: Todoist projectId -> CC area name, from State.todoistProjects (set in Task 1).
+  function areaByProjectId(){
+    var m={}, tp=(app.state&&app.state.todoistProjects)||{}, area;
+    for(area in tp){ if(tp[area]) m[tp[area]]=area; }
+    return m;
+  }
+  // Non-destructive Todoist read: fetch active CC-tree tasks per area, normalize, compute tiles.
+  // Does NOT mutate the Notion-backed app.tasks (no cutover) — fills app.todoistTasks/app.todoistTiles
+  // for the new read panels. Exposed as a smoke hook for live verification before any UI placement.
+  async function loadTodoistTiles(){
+    var map=areaByProjectId(), ids=Object.keys(map), all=[], i, j;
+    for(i=0;i<ids.length;i++){
+      try{
+        var r=await call(TT.findTasks,{projectId:ids[i]});
+        var o=(r&&r.tasks)?r:(toObj(r)||{});
+        var list=(o&&o.tasks)||[];
+        for(j=0;j<list.length;j++) all.push(CCData.normalizeTodoistTask(list[j], map));
+      }catch(e){ DIAG.err=String((e&&e.message)||e); }
+    }
+    app.todoistTasks=all;
+    app.todoistTiles=CCData.todoistTileCounts(all);
+    app.todoistPanel=CCData.splitTodayPanel(all,{today:hstDate(),threshold:tdOverdueThreshold()});
+    return app.todoistTiles;
+  }
+  try{ window.__ccLoadTodoist=loadTodoistTiles; }catch(e){}
+
+  // ---- 3d: Inbox chip — count of un-triaged Inbox tasks (read-only, deep-links to Todoist) ----
+  async function loadTodoistInbox(){
+    try{
+      var r=await call(TT.findTasks,{projectId:"inbox"});
+      var o=(r&&r.tasks)?r:(toObj(r)||{});
+      var list=(o&&o.tasks)||[];
+      app.todoistInbox=list.filter(function(t){return !t.checked;}).length;
+    }catch(e){ app.todoistInbox=null; DIAG.err=String((e&&e.message)||e); }
+    return app.todoistInbox;
+  }
+
+  // ---- Task 10: completed-today (display-only). Activity log is the source of truth — recurring
+  // completions appear here but NOT in find-completed-tasks (CP3 spike). Counts CC-tree projects only. ----
+  async function loadTodoistCompletedToday(){
+    var map=areaByProjectId(), ids=Object.keys(map), all=[], i, j;
+    var w=CCData.hstDayUtcWindow(hstDate())||{};
+    for(i=0;i<ids.length;i++){
+      try{
+        var r=await call(TT.findActivity,{projectId:ids[i],objectType:"item",eventType:"completed",limit:100});
+        var o=(r&&r.events)?r:(toObj(r)||{});
+        var evs=(o&&o.events)||[];
+        for(j=0;j<evs.length;j++) all.push(evs[j]);
+      }catch(e){ DIAG.err=String((e&&e.message)||e); }
+    }
+    app.todoistCompletedToday=CCData.completedInTreeOnDay(all, ids, w.since, w.until).length;
+    return app.todoistCompletedToday;
+  }
+  try{ window.__ccLoadCompleted=loadTodoistCompletedToday; }catch(e){}
+
+  // ---- 3b/3d render (read-only; no data-act so the global toggle handler never fires) ----
+  function tdRowHtml(t){
+    var today=hstDate(), due=String(t.due||"").slice(0,10);
+    var right=(due&&due<today)?'<span class="c-red">overdue · '+esc(prettyDate(due))+'</span>'
+      :(due===today)?'<span class="c-amber">today</span>'
+      :due?esc(prettyDate(due)):'open';
+    var star='<span class="ptog '+(t.priority?"on":"")+'" data-act="td-prio" data-id="'+esc(t.id)+'" role="button" title="Toggle priority" aria-label="Toggle priority">★</span>';
+    var tag=t.area?'<span class="tag '+(AREA_TAG[t.area]||"cyan")+'">'+esc(t.area)+'</span>':'';
+    var rec=t.recurring?'<span class="tag green" title="Recurring — defer opens Todoist">↻</span>':'';
+    var deferSel='<select class="ipt td-defer-sel" data-act="td-defer" data-id="'+esc(t.id)+'" title="Defer this task" style="flex:0 0 auto;max-width:104px;cursor:pointer;font-size:11px;padding:2px 4px;">'+
+      '<option value="">Defer…</option><option value="not-today">Not today</option><option value="tomorrow">Tomorrow</option><option value="specific">Pick date ›</option></select>';
+    return '<div class="ti">'+
+      '<div class="chk" data-act="td-check" data-id="'+esc(t.id)+'" role="button" title="Complete" aria-label="Complete" style="cursor:pointer;"></div>'+
+      '<div class="name" style="grid-column:2;">'+star+' '+esc(t.title)+'</div>'+
+      '<div class="right">'+right+'</div>'+
+      '<div class="tags">'+tag+rec+deferSel+'</div>'+'</div>';
+  }
+  function renderTodoistToday(){
+    var host=$("td-today-list"); if(!host) return;
+    var panel=app.todoistPanel;
+    if(!panel){ host.innerHTML='<div class="empty">Loading Todoist…</div>'; return; }
+    var rows=panel.today.length?panel.today.map(tdRowHtml).join(""):'<div class="empty">Nothing due today.</div>';
+    var over="";
+    if(panel.overdueCount){
+      if(panel.overdueCollapsed){
+        over='<div class="ti td-open-inbox" role="button" title="Open Todoist to triage" style="cursor:pointer;opacity:.9;">'+
+          '<div class="chk" aria-hidden="true" style="visibility:hidden;"></div>'+
+          '<div class="name" style="grid-column:2;"><span class="c-red">'+panel.overdueCount+' overdue</span> — open in Todoist to triage</div>'+
+          '<div class="right">›</div></div>';
+      }else{
+        over='<div class="section-label" style="padding:8px 14px 2px;">Overdue ('+panel.overdueCount+')</div>'+panel.overdue.map(tdRowHtml).join("");
+      }
+    }
+    host.innerHTML=rows+over;
+    var cc=$("td-today-count");
+    if(cc) cc.textContent=panel.today.length+" today · "+panel.overdueCount+" overdue"+(app.todoistCompletedToday!=null?(" · "+app.todoistCompletedToday+" done today"):"");
+    var oi=host.querySelector(".td-open-inbox");
+    if(oi) oi.addEventListener("click",openTodoistInbox);
+  }
+  function renderInboxChip(){
+    var chip=$("td-inbox-chip"); if(!chip) return;
+    if(app.todoistInbox==null){ chip.style.display="none"; return; }
+    var n=app.todoistInbox;
+    chip.style.display="";
+    chip.textContent="Inbox "+n;
+    chip.title=n+" un-triaged Inbox task"+(n===1?"":"s")+" — open in Todoist";
+    chip.onclick=openTodoistInbox;
+  }
+  function openTodoistInbox(){ try{ window.open(TODOIST_INBOX_URL,"_blank","noopener"); }catch(e){} }
+
+  // ---- Task 5 WRITES: optimistic check-off (+rollback) and quick-add. Smoke-hookable
+  // (window.__ccCheckOff / __ccQuickAdd) so writes are live-verifiable BEFORE the read-only
+  // panel is flipped interactive (UI placement / cutover is a separate, deliberate step). ----
+  function tdRepaintFrom(list){
+    app.todoistTasks=list;
+    app.todoistTiles=CCData.todoistTileCounts(list);
+    app.todoistPanel=CCData.splitTodayPanel(list,{today:hstDate(),threshold:tdOverdueThreshold()});
+    renderTodoistToday();
+    if(typeof renderTodoistSections==="function") renderTodoistSections();
+  }
+  // Optimistic complete: drop the row immediately, POST close, restore the snapshot on failure.
+  // One idempotency key per attempt (reused on retry by the offline queue in Task 9).
+  async function tdCheckOff(id){
+    if(!id) return {ok:false, error:"no id"};
+    var snapshot=app.todoistTasks||[];                 // optimisticRemove is non-mutating -> safe rollback
+    var key=CCData.idempotencyKey("done");
+    tdRepaintFrom(CCData.optimisticRemove(snapshot, id));
+    try{
+      await call(TT.complete, CCData.buildCompleteArgs(id, key));
+      return {ok:true, id:String(id), key:key};
+    }catch(e){
+      // Task 9: durably queue the check-off (SAME key -> X-Request-Id dedupe on flush) instead of
+      // losing it. Keep the optimistic removal: the row stays gone, the op flushes on reconnect.
+      DIAG.err=String((e&&e.message)||e);
+      var qd=CCData.queueTodoistDone({id:id, key:key});
+      if(qd){ lsPush(qd); noteQueued(); }
+      else { tdRepaintFrom(snapshot); }                 // no id to queue -> roll back as before
+      return {ok:false, id:String(id), key:key, queued:!!qd, error:DIAG.err};
+    }
+  }
+  // Quick-add: area -> its sub-project, global -> Inbox (routing in CCData.buildQuickAddArgs).
+  // Authoritative refresh on success (no tmp-id juggling); empty title -> no-op.
+  async function tdQuickAdd(title, area){
+    var tp=(app.state&&app.state.todoistProjects)||{};
+    var key=CCData.idempotencyKey("add");
+    var args=CCData.buildQuickAddArgs(title, area, tp, key);
+    if(!args) return {ok:false, error:"empty title"};
+    try{
+      var r=await call(TT.quickAdd, args);
+      try{ await loadTodoistTiles(); renderTodoistToday(); renderTodoistSections(); }catch(e2){}
+      var o=(r&&r.tasks)?r:(toObj(r)||{});
+      var created=(o&&o.tasks&&o.tasks[0])||null;
+      return {ok:true, projectId:args.tasks[0].projectId, id:created&&created.id, key:key};
+    }catch(e){
+      // Task 9: durably queue the capture (SAME key -> X-Request-Id dedupe on flush). Global/unknown
+      // area routes to Inbox via buildQuickAddArgs at flush time. Empty title can't reach here.
+      DIAG.err=String((e&&e.message)||e);
+      var qa=CCData.queueTodoistAdd({title:title, area:area, key:key});
+      if(qa){ lsPush(qa); noteQueued(); }
+      return {ok:false, key:key, queued:!!qa, error:DIAG.err};
+    }
+  }
+  // ---- Task 6 WRITE: 3-way defer. Same optimistic+rollback shape as tdCheckOff. Recurring/specific-date
+  // deep-link (NEVER mutate recurrence via API); not-today/tomorrow-dated/tomorrow-undated go through
+  // update-tasks (drop "today", optionally snooze due+1 HST). Undated also queues retagTomorrow[] (Task 7
+  // re-applies @today tomorrow). Smoke-hookable (__ccDefer); panel stays read-only until cutover. ----
+  var TODOIST_TASK_URL="https://app.todoist.com/app/task/";
+  async function tdDefer(id, choice){
+    if(!id) return {ok:false, error:"no id"};
+    var snapshot=app.todoistTasks||[];                 // non-mutating helpers -> safe rollback snapshot
+    var task=null, i;
+    for(i=0;i<snapshot.length;i++){ if(snapshot[i] && String(snapshot[i].id)===String(id)){ task=snapshot[i]; break; } }
+    if(!task) return {ok:false, id:String(id), error:"task not found"};
+    var cls=CCData.classifyDefer(task, choice);
+    if(cls==="deep-link"){                              // recurring or user-picked specific date: no API mutation
+      try{ window.open(TODOIST_TASK_URL+encodeURIComponent(id),"_blank","noopener"); }catch(e){}
+      return {ok:true, id:String(id), classification:cls, deepLink:true};
+    }
+    var key=CCData.idempotencyKey("defer");
+    var args=CCData.buildDeferArgs(task, choice, hstDate(), key);
+    tdRepaintFrom(CCData.optimisticRemove(snapshot, id));   // deferring removes it from the Today panel
+    try{
+      await call(TT.update, args);
+      if(cls==="tomorrow-undated"){                    // queue id so the nightly job re-tags @today tomorrow
+        try{ await saveState({retagTomorrow: CCData.registerId(app.state&&app.state.retagTomorrow, String(id))}); }catch(e2){}
+      }
+      return {ok:true, id:String(id), classification:cls, key:key};
+    }catch(e){
+      tdRepaintFrom(snapshot);                          // rollback
+      DIAG.err=String((e&&e.message)||e);
+      return {ok:false, id:String(id), classification:cls, key:key, error:DIAG.err};
+    }
+  }
+  try{ window.__ccCheckOff=tdCheckOff; window.__ccQuickAdd=tdQuickAdd; window.__ccDefer=tdDefer; }catch(e){}
+
+  // ---- 3c calendar: normalize MCP event -> small shape; all-day uses start.date, timed uses start.dateTime ----
+  function normalizeCalEvent(raw, calendarId){
+    raw=raw||{}; var st=raw.start||{}, en=raw.end||{};
+    return {
+      id:String(raw.id||""),
+      start:String(st.dateTime||st.date||""),
+      end:String(en.dateTime||en.date||""),
+      title:String(raw.summary||"(busy)"),
+      allDay:!!(st.date && !st.dateTime),
+      calendarId:calendarId||"",
+      htmlLink:String(raw.htmlLink||"")
+    };
+  }
+  // Fetch today's events (HST window) for each allowed calendar, normalize, merge. Read-only; never
+  // touches app.tasks. Populates app.calendarEvents for the Schedule lane.
+  async function loadCalendar(){
+    var allow=calendarAllowList();
+    // persist the allow-list once so it survives reloads (do not re-prompt).
+    try{ if(app.state && !Array.isArray(app.state.calendarAllowList)){ await saveState({calendarAllowList:allow}); } }catch(e){}
+    var w=CCData.hstDayUtcWindow(hstDate())||{}; var arrays=[], i, j;
+    for(i=0;i<allow.length;i++){
+      try{
+        var r=await call(CAL.listEvents,{calendarId:allow[i],startTime:w.since,endTime:w.until,orderBy:"startTime",pageSize:50});
+        var o=(r&&r.events)?r:(toObj(r)||{});
+        var list=(o&&o.events)||[];
+        var norm=[];
+        for(j=0;j<list.length;j++){
+          if(list[j] && list[j].status==="cancelled") continue;
+          norm.push(normalizeCalEvent(list[j], allow[i]));
+        }
+        arrays.push(norm);
+      }catch(e){ DIAG.err=String((e&&e.message)||e); }
+    }
+    app.calendarEvents=CCData.mergeCalendarEvents(arrays);
+    return app.calendarEvents;
+  }
+  try{ window.__ccLoadCalendar=loadCalendar; }catch(e){}
+
+  // ---- 3c render (read-only; appointments are NOT deferrable: time + open-in-calendar link only) ----
+  function calTimeLabel(ev){
+    if(ev.allDay) return "all day";
+    var d=new Date(String(ev.start||""));
+    if(!isNaN(d.getTime())){
+      try{ return new Intl.DateTimeFormat("en-US",{timeZone:"Pacific/Honolulu",hour:"numeric",minute:"2-digit"}).format(d); }catch(e){}
+    }
+    var m=/T(\d{2}):(\d{2})/.exec(String(ev.start||"")); return m?(m[1]+":"+m[2]):"";
+  }
+  function calRowHtml(ev){
+    var link=ev.htmlLink
+      ? '<a class="right" href="'+esc(ev.htmlLink)+'" target="_blank" rel="noopener" title="Open in Google Calendar">open \u203A</a>'
+      : '<div class="right"></div>';
+    return '<div class="ti">'+
+      '<div class="chk" aria-hidden="true" style="visibility:hidden;"></div>'+
+      '<div class="name" style="grid-column:2;"><span class="c-amber">'+esc(calTimeLabel(ev))+'</span> &nbsp;'+esc(ev.title)+'</div>'+
+      link+'</div>';
+  }
+  function renderScheduleToday(){
+    var host=$("td-sched-list"); if(!host) return;
+    var evs=app.calendarEvents;
+    if(evs==null){ host.innerHTML='<div class="empty">Loading schedule\u2026</div>'; return; }
+    host.innerHTML=evs.length?evs.map(calRowHtml).join(""):'<div class="empty">No appointments today.</div>';
+    var cc=$("td-sched-count");
+    if(cc) cc.textContent=evs.length+(evs.length===1?" appt":" appts");
+  }
+
+  // ---- combined non-blocking loader, fired from boot()'s live success path (no cutover) ----
+  async function loadTodoistAndCalendar(){
+    renderTodoistToday();           // paint "Loading\u2026" immediately
+    renderTodoistSections();
+    renderScheduleToday();
+    try{ await loadTodoistTiles(); }
+    catch(e){ app.todoistPanel={today:[],overdue:[],overdueCount:0,overdueCollapsed:false,threshold:tdOverdueThreshold()}; }
+    renderTodoistToday();
+    renderTodoistSections();
+    await loadTodoistInbox();
+    renderInboxChip();
+    try{ await loadTodoistCompletedToday(); }catch(e){}
+    renderTodoistToday();                 // repaint count line with "N done today"
+    try{ await loadCalendar(); }
+    catch(e){ app.calendarEvents=[]; }
+    renderScheduleToday();
+    try{ if(typeof cacheSave==="function") cacheSave(); }catch(e){}   // Task 10: cache read-only panels for instant reloads
+    return app.todoistTiles;
+  }
+  // ---- Phase 2 cutover: INTERACTIVE Todoist area sections (replaces the Notion #task-sections grid).
+  // Renders app.todoistTasks grouped by the 7 CC areas with live complete / priority / defer / quick-add,
+  // all routed to the already-tested write fns (tdCheckOff / tdSetPriority / tdDefer / tdQuickAdd). ----
+  function tdSectionRowHtml(t){
+    var today=hstDate(), due=String(t.due||"").slice(0,10);
+    var right=(due&&due<today)?'<span class="c-red">overdue · '+esc(prettyDate(due))+'</span>'
+      :(due===today)?'<span class="c-amber">today</span>'
+      :due?esc(prettyDate(due)):'open';
+    var star='<span class="ptog '+(t.priority?"on":"")+'" data-act="td-prio" data-id="'+esc(t.id)+'" role="button" title="Toggle priority" aria-label="Toggle priority">★</span>';
+    var labelTags=(Array.isArray(t.labels)?t.labels:[]).filter(function(l){return l!=="today";}).slice(0,3)
+      .map(function(l){return '<span class="tag cyan">'+esc(l)+'</span>';}).join("");
+    var rec=t.recurring?'<span class="tag green" title="Recurring — defer opens Todoist">↻</span>':'';
+    var deferSel='<select class="ipt td-defer-sel" data-act="td-defer" data-id="'+esc(t.id)+'" title="Defer this task" style="flex:0 0 auto;max-width:108px;cursor:pointer;font-size:11px;padding:2px 4px;">'+
+      '<option value="">Defer…</option>'+
+      '<option value="not-today">Not today</option>'+
+      '<option value="tomorrow">Tomorrow</option>'+
+      '<option value="specific">Pick date ›</option>'+
+    '</select>';
+    return '<div class="ti">'+
+      '<div class="chk" data-act="td-check" data-id="'+esc(t.id)+'" role="button" title="Complete" aria-label="Complete" style="cursor:pointer;"></div>'+
+      '<div class="name" style="grid-column:2;">'+star+' '+esc(t.title)+'</div>'+
+      '<div class="right">'+right+'</div>'+
+      '<div class="tags">'+labelTags+rec+deferSel+'</div>'+
+    '</div>';
+  }
+  function renderTodoistSections(){
+    var host=$("task-sections"); if(!host) return;
+    var loaded=(app.todoistTiles!=null)||(Array.isArray(app.todoistTasks)&&app.todoistTasks.length>0);
+    if(!loaded){ host.innerHTML='<div class="empty">Connecting to Todoist…</div>'; return; }
+    var open=(app.todoistTasks||[]).filter(function(t){return !t.done;});
+    var groups=CCData.groupTasksByArea(open, AREAS);
+    host.innerHTML=groups.map(function(g){
+      var dot='<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--'+(AREA_TAG[g.area]||"cyan")+',#5cc8ff);margin-right:7px;vertical-align:middle;"></span>';
+      var rows=g.tasks.length?g.tasks.map(tdSectionRowHtml).join(""):'<div class="empty">No open tasks.</div>';
+      return '<div class="card" style="padding:0;">'+
+        '<div class="panel-head">'+dot+'<span class="panel-title">'+esc(g.area)+'</span><div class="spacer"></div><span class="count-chip">'+g.tasks.length+'</span></div>'+
+        '<div class="quickadd"><input class="ipt" data-td-sec-area="'+esc(g.area)+'" placeholder="+ Add to '+esc(g.area)+'…" /><button class="btn cyan" data-act="td-add-section" data-area="'+esc(g.area)+'">Add</button></div>'+
+        '<div>'+rows+'</div>'+
+      '</div>';
+    }).join("");
+  }
+  // toggle priority: optimistic in-place flip + recompute tiles/panel, revert on failure.
+  async function tdSetPriority(id){
+    var list=app.todoistTasks||[], t=null, i;
+    for(i=0;i<list.length;i++){ if(list[i] && String(list[i].id)===String(id)){ t=list[i]; break; } }
+    if(!t) return {ok:false, error:"task not found"};
+    var newOn=!t.priority, key=CCData.idempotencyKey("prio");
+    t.priority=newOn;                                  // optimistic
+    tdRepaintFrom(list);                               // recompute tiles/panel + repaint today+sections
+    try{ await call(TT.update, CCData.buildPriorityArgs(id, newOn, key)); return {ok:true, id:String(id), priority:newOn?"p1":"p4", key:key}; }
+    catch(e){ t.priority=!newOn; tdRepaintFrom(list); DIAG.err=String((e&&e.message)||e); return {ok:false, id:String(id), error:DIAG.err}; }
+  }
+  function tdSectionAdd(title, area){ title=(title||"").trim(); if(!title) return; tdQuickAdd(title, area); }
+  // bind interactive handlers on #task-sections once (guarded). Distinct td-* acts so the legacy
+  // Notion handlers (data-act="task"/"prio"/"task-add-section") never collide.
+  // Bind interactive handlers on BOTH Todoist task surfaces: the area grid (#task-sections, Tasks tab)
+  // and the Today panel (#td-today-list, Today tab). Per-host guard so re-renders never double-bind.
+  function _wireTdHost(host){
+    if(!host || host._tdWired) return; host._tdWired=true;
+    host.addEventListener("click", function(e){
+      var el=e.target.closest("[data-act]"); if(!el) return;
+      var act=el.getAttribute("data-act"), id=el.getAttribute("data-id");
+      if(act==="td-check"){ tdCheckOff(id); }
+      else if(act==="td-prio"){ tdSetPriority(id); }
+      else if(act==="td-add-section"){
+        var area=el.getAttribute("data-area");
+        var inp=host.querySelector('input[data-td-sec-area="'+area+'"]');
+        if(inp){ var v=inp.value; inp.value=""; tdSectionAdd(v, area); }
+      }
+    });
+    host.addEventListener("change", function(e){
+      var sel=e.target.closest('[data-act="td-defer"]'); if(!sel) return;
+      var id=sel.getAttribute("data-id"), choice=sel.value; sel.value="";
+      if(choice) tdDefer(id, choice);
+    });
+    host.addEventListener("keydown", function(e){
+      if(e.key!=="Enter") return;
+      var inp=e.target.closest('input[data-td-sec-area]'); if(!inp) return;
+      var area=inp.getAttribute("data-td-sec-area"), v=inp.value; inp.value=""; tdSectionAdd(v, area);
+    });
+  }
+  function wireTodoistSections(){ _wireTdHost($("task-sections")); _wireTdHost($("td-today-list")); }
+  try{ window.__ccRenderTodoistSections=renderTodoistSections; window.__ccWireTodoistSections=wireTodoistSections; }catch(e){}
+
+  try{ window.__ccLoadTodoistPanels=loadTodoistAndCalendar; }catch(e){}
   // ---- render ----
   function steps(){return app.routines.filter(function(r){return r.when==="Morning";});}
   function renderSteps(){
@@ -1063,7 +2001,7 @@
     var streak=+app.state.streak||0;var focus=+app.state.focusMinutesToday||0;
     var wkStr=hstDate(new Date(Date.now()-6*864e5));var winsWk=app.wins.filter(function(w){return w.date&&w.date>=wkStr;}).length;
     $("v-streak").textContent=streak;ring("g-streak",Math.min(streak,30)/30);
-    var tp=total?done/total:0;$("v-today").textContent=Math.round(tp*100)+"%";$("s-today").textContent=done+" of "+total+" tasks done";ring("g-today",tp);
+    var pg=CCData.progressGauge({plannedToday:(app.state&&app.state.plannedToday),doneCount:done,fallbackTotal:total});var tp=pg.pct;$("v-today").textContent=Math.round(tp*100)+"%";$("s-today").textContent=pg.done+" of "+pg.total+(pg.active?" planned":" tasks")+" done";ring("g-today",tp);
     var rp=st.length?sd/st.length:0;$("v-routine").textContent=Math.round(rp*100)+"%";$("s-routine").textContent=sd+" of "+st.length+" steps";ring("g-routine",rp);
     $("v-open").textContent=open;$("s-open").textContent=dueToday+" due today · "+overdue+" overdue";$("v-prio").textContent=prio;
     $("v-wins").textContent=winsWk;$("s-wins").textContent=app.wins.length?("last "+prettyDate(app.wins[0].date)):"—";
@@ -1075,11 +2013,31 @@
     $("v-mom").textContent=mom;ring("g-mom",mom/100);
     var status,col;if(mom>=70){status="ON TRACK";col="c-green";}else if(mom>=40){status="BUILDING";col="c-amber";}else{status="GET STARTED";col="c-red";}
     var ms=$("mom-status");ms.textContent=status;ms.className="hero-status "+col;
-    var needTask=app.state.lastCompleted!==today,needWin=app.state.lastWinDate!==today;
-    var sn=app.state.lastStreakDate===today?"Streak secured for today":("Streak needs"+(needTask?" 1 task":"")+(needTask&&needWin?" +":"")+(needWin?" 1 win":"")+" today");
+    // Task 8: dashboard only DISPLAYS the streak status (CCData.streakStatus); the nightly job is the
+    // sole writer of streak/lastStreakDate. completedToday: prefer the responsive in-day proxy
+    // (lastCompleted===today), falling back to the nightly progress count when present.
+    var rpc=CCData.routinePct(st);
+    var compToday=(app.state.lastCompleted===today)?1:((app.state.progress&&app.state.progress.date===today)?(+app.state.progress.completedToday||0):0);
+    var ss=CCData.streakStatus({hasWinToday:app.state.lastWinDate===today,completedToday:compToday,routinePct:rpc.pct,routineSteps:rpc.total,lastStreakDate:app.state.lastStreakDate,today:today,streakGraceUntil:app.state.streakGraceUntil});
+    var NEEDLBL={win:"1 win",task:"1 task",routine:"routine \u226580%"};
+    var sn=ss.secured?"Streak secured for today":("Streak needs "+ss.needs.map(function(k){return NEEDLBL[k];}).join(" + ")+" today");
+    if(ss.warnZeroRoutine) sn+=" \u00b7 routine has no steps";
     $("mom-note").textContent=sn+" · "+open+" open ("+prio+" priority) · "+focus+" focus min";
+    // Phase 2: when Todoist is the live task source, surface its counts in the hero task tiles so the
+    // numbers match the interactive Todoist lists (progress gauge + streak stay nightly-job driven).
+    if(app.todoistTiles){
+      var _tdToday=(app.todoistPanel&&app.todoistPanel.today)?app.todoistPanel.today.length:0;
+      var _tdOver=(app.todoistPanel&&app.todoistPanel.overdueCount)||0;
+      $("v-open").textContent=app.todoistTiles.open;
+      $("s-open").textContent=_tdToday+" due today · "+_tdOver+" overdue";
+      $("v-prio").textContent=app.todoistTiles.p1;
+      $("v-areas").textContent=app.todoistTiles.areasActive;
+      $("s-areas").textContent=Object.keys(app.todoistTiles.byArea||{}).join(" · ")||"—";
+    }
   }
-  function renderAll(){renderSteps();renderTasks();renderTaskSections();renderRoutineEditor();renderCaps();renderWins();renderTopStats();}
+  // Task 7: read-only missed-refresh banner — the nightly job owns the write; client only reads lastRefreshDate.
+  function renderRefreshBanner(){var el=$("refresh-banner");if(!el)return;var miss=CCData.missedRefresh(app.state&&app.state.lastRefreshDate,hstDate());if(miss){el.hidden=false;el.textContent="\u26a0 Nightly refresh hasn’t run since "+prettyDate(app.state.lastRefreshDate)+" — @today, streak, and progress may be stale.";}else{el.hidden=true;}}
+  function renderAll(){renderSteps();renderTasks();renderTodoistSections();renderRoutineEditor();renderCaps();renderWins();renderTopStats();renderRefreshBanner();}
 
   function tick(){var p=hstParts();$("clock").textContent=p.hour+":"+p.minute+":"+p.second;var s=(23-(+p.hour))*3600+(59-(+p.minute))*60+(59-(+p.second));var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);$("reset-countdown").textContent=String(h).padStart(2,"0")+":"+String(m).padStart(2,"0");}
 
@@ -1096,7 +2054,14 @@
     var today=hstDate();var open=app.tasks.filter(function(t){return !t.done;});var prio=open.filter(function(t){return t.priority;});
     var st=steps().filter(function(r){return !r.done;});
     var lines=[];lines.push("Good morning. Here's your "+today+" brief.");lines.push("");
-    lines.push("Streak: "+(+app.state.streak||0)+" days. "+(app.state.lastStreakDate===today?"Secured today.":"Complete 1 task + log 1 win to keep it."));
+    // Task 9 (§3d honesty): seed the brief with the REAL 3-condition streak rule (win + task +
+    // routine ≥80%) via the same CCData.streakStatus the dashboard uses, so brief and dashboard never disagree.
+    var bRpc=CCData.routinePct(steps());
+    var bComp=(app.state.lastCompleted===today)?1:((app.state.progress&&app.state.progress.date===today)?(+app.state.progress.completedToday||0):0);
+    var bSs=CCData.streakStatus({hasWinToday:app.state.lastWinDate===today,completedToday:bComp,routinePct:bRpc.pct,routineSteps:bRpc.total,lastStreakDate:app.state.lastStreakDate,today:today,streakGraceUntil:app.state.streakGraceUntil});
+    var bNEED={win:"1 win",task:"1 task",routine:"routine ≥80%"};
+    var bKeep=bSs.secured?"Secured today.":("To keep it: "+bSs.needs.map(function(k){return bNEED[k];}).join(" + ")+(bSs.warnZeroRoutine?" (routine has no steps)":"")+".");
+    lines.push("Streak: "+(+app.state.streak||0)+" days. "+bKeep);
     if(st.length){lines.push("");lines.push("Morning routine left: "+st.map(function(r){return r.name;}).join(", "));}
     lines.push("");lines.push("Tasks: "+open.length+" open, "+prio.length+" priority.");
     if(prio.length){lines.push("");lines.push("Priority first:");prio.slice(0,5).forEach(function(t){lines.push("  ★ "+t.title);});}
@@ -1145,6 +2110,8 @@
     $("btn-brief").addEventListener("click",openBrief);$("btn-fullbrief").addEventListener("click",openBrief);
     $("btn-sync").addEventListener("click",function(){boot(true);});
     $("badge-ver").addEventListener("click",showDiag);
+    document.addEventListener("visibilitychange",function(){ if(document.hidden){ clearRefreshTimer(); } else { renderSyncAge(); if(app.mode==="live") pollRefresh(); } });
+    if(typeof wireTodoistSections==="function") wireTodoistSections();
   }
 
   // v1.5.0: fire on load when the stored reset date != today. Instant local clear,
@@ -1177,20 +2144,61 @@
     return true;
   }
 
+  // ---- Task 10: background refresh — 3-min poll, 429 backoff (Retry-After), visibility pause, staleness ----
+  // The poll refreshes only the read-only Todoist/Calendar panels (non-disruptive); a full Notion
+  // resync stays user-initiated via the Sync button so a background tick never clobbers local edits.
+  var POLL_MS=180000;                          // 3-min steady cadence (keep sync streamlined)
+  var refreshCtl={lastSuccessTs:0,failures:0,retryAfterMs:0,timer:null,ageTimer:null,base:""};
+  function clearRefreshTimer(){ if(refreshCtl.timer){clearTimeout(refreshCtl.timer);refreshCtl.timer=null;} }
+  function renderSyncAge(){
+    if(app.mode!=="live"||!refreshCtl.lastSuccessTs) return;
+    var rs=CCData.refreshStatus({lastSuccessTs:refreshCtl.lastSuccessTs,now:Date.now(),staleAfterMs:600000});
+    var el=$("sync-status"); if(el) el.textContent=refreshCtl.base+(rs.text?(" · "+rs.text):"");
+    var p=$("pill-live"); if(p){ if(rs.stale)p.classList.add("stale"); else p.classList.remove("stale"); }
+  }
+  function scheduleNextPoll(ok,status,retryMs){
+    clearRefreshTimer();
+    if(document.hidden) return;                 // paused while tab hidden; visibility handler resumes
+    var delay=CCData.nextRefreshDelay({ok:ok,status:status,retryAfterMs:retryMs,failures:refreshCtl.failures,pollMs:POLL_MS});
+    refreshCtl.timer=setTimeout(pollRefresh,delay);
+  }
+  async function pollRefresh(){
+    if(document.hidden||app.mode!=="live"){ scheduleNextPoll(true,0,0); return; }
+    var before=NET.r429, ok=true, status=0, retryMs=0;
+    try{ await loadTodoistAndCalendar(); }catch(e){}
+    if(NET.r429>before){ ok=false; status=429; retryMs=NET.retryAfterMs||0; refreshCtl.failures++; refreshCtl.retryAfterMs=retryMs; }
+    else { refreshCtl.lastSuccessTs=Date.now(); refreshCtl.failures=0; refreshCtl.retryAfterMs=0; try{cacheSave();}catch(_c){} }
+    renderSyncAge();
+    scheduleNextPoll(ok,status,retryMs);
+  }
+  function startPolling(baseMsg){
+    if(baseMsg!=null) refreshCtl.base=baseMsg;
+    refreshCtl.lastSuccessTs=Date.now(); refreshCtl.failures=0; refreshCtl.retryAfterMs=0;
+    clearRefreshTimer();
+    if(refreshCtl.ageTimer)clearInterval(refreshCtl.ageTimer);
+    refreshCtl.ageTimer=setInterval(renderSyncAge,30000);   // tick the "updated Xm ago" label
+    scheduleNextPoll(true,0,0);
+    renderSyncAge();
+  }
+  try{ window.__ccPoll=pollRefresh; }catch(e){}
+
   async function boot(isResync){
     $("today-date").textContent=prettyDate(hstDate())+" "+new Date().getFullYear();
     loadSnapshot();
     var _cached=cacheLoad();
-    if(_cached){app.state=_cached.state;app.tasks=_cached.tasks;app.routines=_cached.routines;app.wins=_cached.wins;app.caps=_cached.caps||[];applyLocal();}
+    if(_cached){app.state=_cached.state;app.tasks=_cached.tasks;app.routines=_cached.routines;app.wins=_cached.wins;app.caps=_cached.caps||[];applyLocal();
+      if(_cached.todoistPanel){app.todoistTasks=_cached.todoistTasks||[];app.todoistTiles=_cached.todoistTiles||null;app.todoistPanel=_cached.todoistPanel;app.todoistInbox=(_cached.todoistInbox!=null?_cached.todoistInbox:null);app.todoistCompletedToday=(_cached.todoistCompletedToday!=null?_cached.todoistCompletedToday:null);app.calendarEvents=_cached.calendarEvents||null;
+        try{ if(typeof renderTodoistToday==="function"){ renderTodoistToday(); renderTodoistSections(); renderScheduleToday(); renderInboxChip(); } }catch(e){}}
+    }
     renderAll();
     setSync("snap",_cached?("cached data · checking live link…"):("snapshot loaded · checking live link…"));
     var ok=await waitBridge(5000);
     // Live path works two ways: Cowork bridge (ok===true) OR the Netlify notion-proxy (no bridge).
     // call() auto-routes to the proxy when hasBridge() is false; if neither is reachable, liveLoad throws and we demote to snapshot.
     app.mode="live";setSync("live",ok?"connecting Notion…":"connecting Notion (proxy)…");
-    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();setSync("live",app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):""));if(isResync)toast("Synced");}
+    try{var fl=await flushPending();await liveLoad();var didReset=runDailyReset();renderAll();if(didReset && typeof showTab==="function") showTab("routine");cacheSave();var _live=app.tasks.length+" tasks · "+steps().length+" routine steps · "+app.wins.length+" wins"+(fl?(" · "+fl+" queued"):"");setSync("live",_live);if(isResync)toast("Synced");loadTodoistAndCalendar().catch(function(){});startPolling(_live);}
     catch(e){
-      app.mode="snapshot";renderAll();
+      app.mode="snapshot";clearRefreshTimer();renderAll();
       var kind=CCData.classifySyncError(String((e&&e.message)||e)||DIAG.err);
       var pc=(lsGet().pending||[]).length;
       var qmsg=pc?(" · "+pc+" change"+(pc===1?"":"s")+" queued"):"";

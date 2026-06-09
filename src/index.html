@@ -34,6 +34,7 @@ __CC_STYLES__
   </div>
 
   <div class="wrap">
+    <div id="refresh-banner" class="refresh-banner" hidden></div>
     <div id="tab-today">
       <section>
         <div class="row r-gauges">
@@ -124,7 +125,7 @@ __CC_STYLES__
       <section>
         <div class="main">
           <div>
-            <div class="card" style="padding:0;">
+            <div class="card" id="notion-today-card" style="padding:0;display:none;">
               <div class="panel-head">
                 <span class="panel-title">Today's Tasks</span>
                 <div class="spacer"></div>
@@ -136,6 +137,24 @@ __CC_STYLES__
                 <button class="btn cyan" id="qa-task-btn">Add</button>
               </div>
               <div id="task-list"><div class="empty">Loading tasks…</div></div>
+            </div>
+            <div class="card col-gap" style="padding:0;">
+              <div class="panel-head">
+                <span class="panel-title">Today</span>
+                <div class="spacer"></div>
+                <span class="count-chip" id="td-inbox-chip" style="display:none;cursor:pointer;">Inbox 0</span>
+                <span class="count-chip" id="td-today-count" style="margin-left:8px;">—</span>
+              </div>
+              <div id="td-today-list"><div class="empty">Loading Todoist…</div></div>
+            </div>
+            <div class="card col-gap" style="padding:0;">
+              <div class="panel-head">
+                <span class="panel-title">Schedule · Today</span>
+                <span class="tag cyan" style="margin-left:8px;">preview</span>
+                <div class="spacer"></div>
+                <span class="count-chip" id="td-sched-count">—</span>
+              </div>
+              <div id="td-sched-list"><div class="empty">Loading schedule…</div></div>
             </div>
           </div>
 
