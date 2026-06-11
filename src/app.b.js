@@ -194,14 +194,14 @@
 
   function tick(){var p=hstParts();$("clock").textContent=p.hour+":"+p.minute+":"+p.second;var s=(23-(+p.hour))*3600+(59-(+p.minute))*60+(59-(+p.second));var h=Math.floor(s/3600),m=Math.floor((s%3600)/60);$("reset-countdown").textContent=String(h).padStart(2,"0")+":"+String(m).padStart(2,"0");}
 
-  var timer={total:25*60,left:25*60,running:false,iv:null};
+  var timer={total:25*60,left:25*60,running:false,iv:null,endAt:0};
   function fmt(s){var m=Math.floor(s/60),x=s%60;return String(m).padStart(2,"0")+":"+String(x).padStart(2,"0");}
   function paintTimer(){var s=fmt(timer.left),off=1-timer.left/timer.total;if($("timer-display"))$("timer-display").textContent=s;if($("timer-display-focus"))$("timer-display-focus").textContent=s;ring("g-timer",off);ring("g-timer-focus",off);}
   function setTimerState(txt){if($("timer-state"))$("timer-state").textContent=txt;if($("timer-state-focus"))$("timer-state-focus").textContent=txt;}
   function setStartLabel(txt){if($("t-start"))$("t-start").textContent=txt;if($("t-start-focus"))$("t-start-focus").textContent=txt;}
-  function startTimer(){if(timer.running){clearInterval(timer.iv);timer.running=false;setStartLabel("Start");setTimerState("Paused");return;}timer.running=true;setStartLabel("Pause");setTimerState("Running · stay on one thing");$("timer-sub").textContent="break at 0:00";timer.iv=setInterval(function(){timer.left--;paintTimer();if(timer.left<=0){clearInterval(timer.iv);timer.running=false;setStartLabel("Start");setTimerState("Done · nice work");$("timer-sub").textContent="logged to Focus Sessions";var mins=Math.round(timer.total/60);logFocus(mins);toast("Focus done · "+mins+"m");timer.left=timer.total;setTimeout(paintTimer,1500);}},1000);}
-  function resetTimer(){clearInterval(timer.iv);timer.running=false;timer.left=timer.total;setStartLabel("Start");setTimerState("Ready · "+(timer.total/60)+"-min pomodoro");$("timer-sub").textContent="press Start to begin";paintTimer();}
-  function add5(){timer.total+=5*60;timer.left+=5*60;paintTimer();setTimerState("Ready · "+(timer.total/60)+"-min pomodoro");}
+  function startTimer(){if(timer.running){clearInterval(timer.iv);timer.running=false;timer.left=Math.max(0,Math.ceil((timer.endAt-Date.now())/1000));setStartLabel("Start");setTimerState("Paused");paintTimer();return;}timer.running=true;timer.endAt=Date.now()+timer.left*1000;setStartLabel("Pause");setTimerState("Running · stay on one thing");$("timer-sub").textContent="break at 0:00";timer.iv=setInterval(function(){timer.left=Math.max(0,Math.ceil((timer.endAt-Date.now())/1000));paintTimer();if(timer.left<=0){clearInterval(timer.iv);timer.running=false;setStartLabel("Start");setTimerState("Done · nice work");$("timer-sub").textContent="logged to Focus Sessions";var mins=Math.round(timer.total/60);logFocus(mins);toast("Focus done · "+mins+"m");timer.left=timer.total;setTimeout(paintTimer,1500);}},250);}
+  function resetTimer(){clearInterval(timer.iv);timer.running=false;timer.left=timer.total;timer.endAt=0;setStartLabel("Start");setTimerState("Ready · "+(timer.total/60)+"-min pomodoro");$("timer-sub").textContent="press Start to begin";paintTimer();}
+  function add5(){timer.total+=5*60;if(timer.running){timer.endAt+=5*60*1000;timer.left=Math.max(0,Math.ceil((timer.endAt-Date.now())/1000));}else{timer.left+=5*60;setTimerState("Ready · "+(timer.total/60)+"-min pomodoro");}paintTimer();}
 
   function openBrief(){
     var today=hstDate();var open=app.tasks.filter(function(t){return !t.done;});var prio=open.filter(function(t){return t.priority;});

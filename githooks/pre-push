@@ -1,0 +1,13 @@
+#!/bin/sh
+# Pre-push gate: refuse to push if dist/index.html is stale or corrupt.
+# Installed by scripts/install-hooks.sh (sets core.hooksPath=githooks).
+# This is the safety net for the recurring stale/truncated-deploy problem:
+# even if a build step is skipped or a mount read truncated, this blocks the push.
+repo="$(git rev-parse --show-toplevel)" || exit 1
+echo "[pre-push] verifying dist/index.html integrity…"
+if ! node "$repo/verify-dist.js"; then
+  echo "[pre-push] BLOCKED — dist failed verification (see above)." >&2
+  echo "[pre-push] Fix: rebuild on a trusted/local filesystem with 'node cc-build.js', then push again." >&2
+  exit 1
+fi
+exit 0
